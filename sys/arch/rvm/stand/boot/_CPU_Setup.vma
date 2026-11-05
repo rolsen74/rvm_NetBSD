@@ -1,0 +1,276 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; -None-
+;
+; Output:
+;
+; (U64)  r8 = Number of Memory Pages
+; (STR)  r9 = Error String
+; (PTR) r10 = End of Code / Start of FHR file
+; (PTR) r63 = Stack Pointer (Upper memory)
+;
+; Note:
+;
+;   Function setup VBR Handlers (excluding interrupts)
+;
+
+Func_CPU_Setup:
+
+		; -- Clear Error String
+		rclr.q		r9
+
+		; -- Setup temp stack
+		lea		.TmpStackEnd,r63
+
+		; -- Setup vbr
+		lea		.VBR,r25
+		mtctrl		r25,vbr
+
+		lea		.CrashHandle_Illegal,r1
+		move.q		r1,(VBR_00_Illegal*8,r25)
+
+		lea		.CrashHandle_Privilege,r1
+		move.q		r1,(VBR_01_Privilege*8,r25)
+
+		lea		.CrashHandle_MMUExe,r1
+		move.q		r1,(VBR_02_MMU_Exe*8,r25)
+
+		lea		.CrashHandle_MMURead,r1
+		move.q		r1,(VBR_03_MMU_Read*8,r25)
+
+		lea		.CrashHandle_MMUWrite,r1
+		move.q		r1,(VBR_04_MMU_Write*8,r25)
+
+		lea		.CrashHandle_MMUEnable,r1
+		move.q		r1,(VBR_05_MMU_Enable*8,r25)
+
+		lea		.CrashHandle_MMUTabel,r1
+		move.q		r1,(VBR_06_MMU_Tabel*8,r25)
+
+		lea		.ChkHandler,r1
+		move.q		r1,(VBR_07_Mem_Read*8,r25)
+
+		lea		.CrashHandle_MemWrite,r1
+		move.q		r1,(VBR_08_Mem_Write*8,r25)
+
+		lea		.CrashHandle_DivZero,r1
+		move.q		r1,(VBR_09_Div_Error*8,r25)
+
+		lea		.CrashHandle_SysCall,r1
+		move.q		r1,(VBR_10_SysCall*8,r25)
+
+		lea		.CrashHandle_Stack,r1
+		move.q		r1,(VBR_11_Stack*8,r25)
+
+
+		; -- Clear Page counter
+		rclr.q		r8
+
+		; -- First Address to Check
+		rclr.q		r13
+
+		; -- Page step into r14
+		move.q		#1024*1024*1,r14	; 1mb
+
+		; -- Exit Pointer
+		lea		.Exit,r15
+.Loop:
+		; -- Try to read from Memory
+		tst.b		(r13)
+
+		; -- We Passed and found a page
+
+		vadd.q		#16,r8,r8		; 1024 * 1024 * 1 / 65536 or 16 pages
+
+		; -- Calc next Memory Address
+		radd.q		r14,r13,r13
+
+		; -- Test next Memory Chunk
+		jmp		.Loop
+.Exit:
+		; -- Page step into r14
+		move.q		#65536,r14		; 64kb or 1 page
+
+		; -- Exit Pointer
+		lea		.Loop2,r15
+.Loop2:
+		vsub.q		#1,r8,r8
+		rsub.q		r14,r13,r13
+
+		; -- Try to read from Memory
+		tst.b		(r13)
+
+		; Adjust Counter
+		vadd.q		#1,r8,r8
+
+		; Set Stack Pointer
+		lea		(r14.q,r13),r63		
+
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_MemRange,r3
+		vmove.q		#100,r4
+		rclr.q		r5
+		lea		(r14.q,r13),r6
+		vsub.q		#1,r6,r6
+		emufunc
+
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_MemPages,r3
+		vmove.q		#100,r4
+		rmove.q		r8,r5
+		emufunc
+
+		; -- Set correct Handler
+		lea		.CrashHandle_MemRead,r1
+		move.q		r1,(VBR_07_Mem_Read*8,r25)
+
+		; -- NetBSD bring-up keeps caches disabled
+		; -- Make sure VBR is not in cache, so enable last
+;		vmove.q		#0,r0
+;		mtctrl		r0,CR
+
+		jmp		CPU_Setup_Done
+
+.ChkHandler:	; -- Set exit PC
+		move.q		r15,(8,sp)		; Set Return PC
+		rte
+
+		; -- Illegal Opcode : Handler
+
+.CrashHandle_Illegal:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_Illegal,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- Priv Opcode : Handler
+
+.CrashHandle_Privilege:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_Privilege,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- MMU Exe : Handler
+
+.CrashHandle_MMUExe:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MMUExe,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- MMU Read : Handler
+
+.CrashHandle_MMURead:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MMURead,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- MMU Write : Handler
+
+.CrashHandle_MMUWrite:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MMUWrite,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- MMU Enable : Handler
+
+.CrashHandle_MMUEnable:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MMUEnable,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- MMU Tabel : Handler
+
+.CrashHandle_MMUTabel:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MMUTabel,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- Memory Read : Handler
+
+.CrashHandle_MemRead:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MemRead,r3
+		vmove.q		#-1,r4
+		halt
+		emufunc
+		emuexit
+
+		; -- Memory Write : Handler
+
+.CrashHandle_MemWrite:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_MemWrite,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- Integer Div by Zero : Handler
+
+.CrashHandle_DivZero:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_DivZero,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- SysCall : Handler
+
+.CrashHandle_SysCall:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_SysCall,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- Stack : Handler
+
+.CrashHandle_Stack:
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_VBR_Stack,r3
+		vmove.q		#-1,r4
+		emufunc
+		emuexit
+
+		; -- 
+
+.Str_VBR_Illegal:	dc.b		"VBR: Illegal Instruction",10,0
+.Str_VBR_Privilege:	dc.b		"VBR: Privilege Instruction",10,0
+.Str_VBR_MMUExe:	dc.b		"VBR: MMU Exe Error",10,0
+.Str_VBR_MMURead:	dc.b		"VBR: MMU Read Error",10,0
+.Str_VBR_MMUWrite:	dc.b		"VBR: MMU Write Error",10,0
+.Str_VBR_MMUEnable:	dc.b		"VBR: MMU Enable Error",10,0
+.Str_VBR_MMUTabel:	dc.b		"VBR: MMU Tabel Error",10,0
+.Str_VBR_MemRead:	dc.b		"VBR: Memory Read Error",10,0
+.Str_VBR_MemWrite:	dc.b		"VBR: Memory Write Error",10,0
+.Str_VBR_DivZero:	dc.b		"VBR: Integer divide with Zero",10,0
+.Str_VBR_SysCall:	dc.b		"VBR: SysCall",10,0
+.Str_VBR_Stack:		dc.b		"VBR: Stack Error",10,0
+.Str_MemRange:		dc.b		"-> Memory Range $%X-$%X",10,0
+.Str_MemPages:		dc.b		"-> Memory Pages #%d",10,0
+
+.VBR:			ds.q		VBR_LAST
+.TmpStack:		ds.q		8
+.TmpStackEnd:

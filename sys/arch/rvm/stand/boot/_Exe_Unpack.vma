@@ -1,0 +1,41 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR) r10 = File Start (Header)
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (S64)  r0 = Error (TRUE/FALSE)
+; (STR)  r9 = Error String
+; (PTR) r10 = File Start (Header)
+;
+; Note:
+;
+;   Function unpack file data. None is supported right now
+;   Unpack may update File Start (r10) pointer
+;
+
+Func_Exe_Unpack:
+		vmove.q		#1,r0
+
+		lea		.Str_File_Pack,r9
+
+		tst.w		(FHR_Pack,r10)
+		bne		.Exit
+
+		rclr.q		r0
+.Exit:
+		rtst.q		r0
+		rts
+
+.Str_File_Pack:		dc.b		"FHR: Unsupported Packer",10,0

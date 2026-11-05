@@ -7,8 +7,7 @@
 # This file deliberately excludes Amiga hardware and unimplemented
 # RVM devices. Enable drivers as they are added to files.rvm.
 #
-# TODO: create arch/rvm/conf/std.rvm and implement the machine-dependent
-# files and options it references before running config(1).
+# Full kernel configuration/build support is still under development.
 
 include "arch/rvm/conf/std.rvm"
 

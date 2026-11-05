@@ -1,0 +1,20 @@
+/* RVM CPU page-table format, from SnakeOS MMU.h and VMEmu's walker. */
+#ifndef _RVM_MMU_H_
+#define _RVM_MMU_H_
+
+#define RVM_MMU_PAGE_SHIFT 16
+#define RVM_MMU_PAGE_SIZE 65536UL
+#define RVM_MMU_PAGE_MASK 65535UL
+#define RVM_MMU_TABLE_SIZE 2048UL
+#define RVM_MMU_TABLE_MASK 2047UL
+#define RVM_MMU_ENTRIES 256
+#define RVM_MMU_LEVELS 6
+#define RVM_PTE_USED_READ 0x0008UL
+#define RVM_PTE_USED_WRITE 0x0010UL
+#define RVM_PTE_VALID 0x0020UL
+#define RVM_PTE_READ 0x0040UL
+#define RVM_PTE_WRITE 0x0080UL
+#define RVM_PTE_EXEC 0x0100UL
+#define RVM_PTE_SUPERVISOR 0x0400UL
+
+#endif /* _RVM_MMU_H_ */

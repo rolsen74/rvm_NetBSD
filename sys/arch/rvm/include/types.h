@@ -56,16 +56,15 @@ typedef unsigned int __cpu_simple_lock_nv_t;
 #define __SIMPLELOCK_LOCKED	  1
 #define __SIMPLELOCK_UNLOCKED 0
 
+/* Conservative integer save area; setjmp/longjmp are not implemented yet. */
+typedef struct {
+	__uint64_t val[66]; /* R0-R63, PC, SR */
+} label_t;
+
 /*
- * TODO: Define label_t for kernel setjmp/longjmp once the RVM
- * callee-saved register set and exception/context-switch ABI are fixed.
- *
  * TODO: Enable __HAVE_* feature flags only after implementing their
  * required machine-dependent operations (atomics, TLS, CPU counters,
  * pmap optimizations, etc.).
- *
- * TODO: Provide sys/arch/rvm/include/int_types.h for NetBSD's
- * machine integer typedefs and printf-format macros.
  */
 
 #endif /* _RVM_TYPES_H_ */

@@ -1,0 +1,102 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR)  r0 = Read Buffer
+; (PTR)  r1 = Write Buffer
+; (U64)  r2 = Buffer Length (Unsigned)
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (PTR) r63 = Temp Stack (4k)
+;
+
+Func_Memory_Copy:
+		pushf		r0-r2
+
+		rtst.q		r0		; This is non standard clib
+		beq		.Done		; NULL Pointer check
+
+		rtst.q		r1		; This is non standard clib
+		beq		.Done		; NULL Pointer check
+
+		rtst.q		r2		; Fast check if value
+		beq		.Done		; is non zeros
+
+		;
+		; -- Copy Quads --
+		;
+
+		vcmp.q		#16,r2		; Check if there are
+		bcs		.1		; 16 or more bytes left
+.loop:
+		move.q		(r0)+,(r1)+	; 5 : Move 8 bytes
+		move.q		(r0)+,(r1)+	; 5 : Move 8 bytes
+
+		vsub.q		#16,r2,r2	; 5 : Subtract 8 bytes
+		vcmp.q		#16,r2		; 4 : Check if there are
+		bcc		.loop		; 5 : 8 or more bytes left
+						; ( bcc defaults word brance so 2+1+2 bytes )
+						; 24 bytes loops 
+
+		rtst.q		r2		; Fast check for Zero
+		beq		.Done		; beq outside loop to 
+						; keep loop small
+.1:
+		;
+		; -- Copy Quad --
+		; 
+		; There are max 15 bytes left
+		;
+
+		vcmp.q		#8,r2		; Check if there are
+		bcs		.2		; 8 or more bytes left
+		move.q		(r0)+,(r1)+	; Move 8 bytes
+		vsub.q		#8,r2,r2	; Subtract 8 bytes
+		beq		.Done		; Fast check for Zero
+.2:
+		;
+		; -- Copy Long --
+		;
+		; There are max 7 bytes left
+		;
+
+		vcmp.q		#4,r2		; Check if there are
+		bcs		.3		; 4 or more bytes left
+		move.l		(r0)+,(r1)+	; Move 4 bytes
+		vsub.q		#4,r2,r2	; Subtract 4 bytes
+		beq		.Done		; Fast check for Zero
+.3:
+		;
+		; -- Copy Word --
+		;
+		; There are max 3 bytes left
+		;
+
+		vcmp.q		#2,r2		; Check if there are
+		bcs		.4		; 2 or more bytes
+		move.w		(r0)+,(r1)+	; Move 2 bytes
+		vsub.q		#2,r2,r2	; Subtract 2 bytes
+		beq		.Done		; Fast check for Zero
+.4:
+		;
+		; -- Copy Byte --
+		;
+		; There are 1 byte left
+		;
+
+		move.b		(r0)+,(r1)+	; Move 1 byte
+.Done:
+		popf
+		rts
+
+********************************************************

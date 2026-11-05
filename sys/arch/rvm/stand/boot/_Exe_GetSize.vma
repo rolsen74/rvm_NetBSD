@@ -1,0 +1,85 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR) r10 = File Start (Header)
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (S64)  r0 = Error (TRUE/FALSE)
+; (STR)  r9 = Error String
+; (PTR) r10 = File Start (Header)
+; (PTR) r11 = File End
+; (U64) r12 = File Size
+;
+; Note:
+;
+;
+
+Func_Exe_GetSize:
+
+		; -- Set Error Stat
+		vmove.q		#1,r0
+		lea		.Str_File_ID,r9
+
+		; -- Skip Header and Section Info
+		lea		(FHR_SIZEOF,r10),r11
+
+		rclr.q		r1
+		move.w		(FHR_Sections,r10),r1
+
+		vmulu.q		#SECI_SIZEOF,r1,r2	; Sec Info ( Size.q, Align.w, Flags.w )
+		radd.q		r2,r11,r11
+
+		;  r1 = sections
+		;  r2 = temp
+		; r11 = file end
+		; -- 'Parse' Hunks to find File Size
+.Loop:
+		move.l		(r11)+,r2	; Get Hunk ID
+		cmp.l		#FHR_DAT0,r2
+		beq		.Found
+		cmp.l		#FHR_BSS0,r2
+		beq		.Loop		; BSS0 don't have a Size
+		cmp.l		#FHR_END0,r2
+		beq		.End		; Unknown Hunk ID
+		cmp.l		#FHR_COD0,r2
+		bne		.Exit
+.Found:
+		add.q		(r11)+,r11	; Add Size to Pointer
+		jmp		.Loop
+.End:
+		; END0 do not have a Size
+		vsub.q		#1,r1,r1
+		bne		.Loop
+
+		; Calc File Size, and set Return value
+		rsub.q		r10,r11,r12
+
+		; -- Print size
+		pushf		r0-r5
+		vmove.q		#EMUCMD_PrintString,r2
+		lea		.Str_Size,r3
+		vmove.q		#100,r4
+		rmove.q		r12,r5
+		emufunc
+		popf
+
+		; -- Clear Error Stat
+		rclr.q		r0
+
+.Exit:
+		rtst.q		r0
+		rts
+
+.Str_File_ID:	dc.b		"FHR: Unsupported ID",10,0
+.Str_Size:	dc.b		"-> FHR File size %d bytes",10,0

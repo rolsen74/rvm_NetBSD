@@ -1,0 +1,141 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR)  r2 = Reloc Adr
+; (U64) r19 = Section Memory Size
+; (U64) r20 = Get Number of Sections
+; (PTR) r23 = Section Array
+; (PTR) r26 = Section Memory Adr
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (S64)  r0 = Error Stat
+; (STR)  r9 = Error String
+; (PTR) r63 = Temp Stack (4k)
+;
+
+Func_Reloc_Parse:
+		pushf		r1-r8/r10
+		vmove.q		#1,r10			; Set Error State
+
+		; -----------------
+		; -- Main Loop
+.Main_Loop:
+		jsr		.ReadVal
+		rmove.q		r0,r4			; Number of Relocs
+		bne		.Relocs
+
+		; -----------------
+		; -- Normal Exit
+
+		rclr.q		r10			; Clear Error State
+.Main_Exit:
+		rmove.q		r10,r0
+		popf
+		rtst.q		r0
+		rts
+
+		; -----------------
+		; -- Handle Relocs
+.Relocs:
+		jsr		.ReadVal
+
+		lea		.Str_RelocSec,r9
+		rmove.q		r0,r5			; Sec nr
+		rcmp.q		r20,r5
+		bhi		.Main_Exit		; Src < Dst (Unsigned)
+
+		jsr		.ReadVal
+
+		vcmp.q		#FHR_RELTYPE_RELOC,r0
+		beq		.Reloc_ABS64
+
+		lea		.Str_RelocType,r9
+		jmp		.Main_Exit
+
+		; -----------------
+		; -- 64bit ABS Relocs
+
+.Reloc_ABS64:
+		move.q		(r5.q*8,r23),r7		; Get Target Section Address
+		vsub.q		#8,r19,r8		; ABS64 is 8 bytes
+		lea		.Str_RelocOffset,r9
+.ABS64_Loop:
+		jsr		.ReadVal
+
+		rcmp.q		r0,r8			; Validate Offset
+		bcs		.Main_Loop		; Src > Dst (Unsigned)
+
+		add.q		r7,(r0.q,r26)		; Apply Reloc
+
+		vsub.q		#1,r4,r4
+		bne		.ABS64_Loop
+
+		jmp		.Main_Loop
+
+		; -----------------
+		; -- Read Relocs Value
+		;
+		; Input:
+		;
+		;  r2 = Memory Adr
+		;
+		; Output:
+		;
+		;  r0 = 64bit Value 
+		;  r1 = Trashed
+		;  r2 = Memory Adr
+		;  r3 = Trashed
+		;
+.ReadVal:
+		exts.b		(r2)+,r0
+		bpl		.ReadVal5
+
+		rmove.q		r0,r1		; Control Char
+		rclr.q		r0		; Return Value
+		rclr.q		r3		; Counter
+.ReadVal3:
+		vlsl.q		#8,r0,r0
+
+		rbtst.q		r3,r1
+		beq		.ReadVal4
+		move.b		(r2)+,r0
+.ReadVal4:
+		vadd.q		#1,r3,r3
+		vcmp.q		#8,r3
+		bne		.ReadVal3
+.ReadVal5:
+
+;	pushf		r0-r5
+;	rmove.q		r0,r3
+;	vmove.q		#EMUCMD_PrintString,r0
+;	lea		.Str_Reloc,r1
+;	vmove.q		#100,r2
+;	emufunc
+;	rmove.q		r20,r3
+;	emufunc
+;	popf
+
+		rtst.q		r0
+		rts
+
+		; -----------------
+		; -- Error Strings
+
+.Str_RelocType:		dc.b		"FHR: Unsupported Reloc Type",10,0
+.Str_RelocSec:		dc.b		"FHR: Invalid Section Target",10,0
+.Str_RelocOffset:	dc.b		"FHR: Invalid Reloc Offset",10,0
+
+;.Str_SecInfo:		dc.b		"FHR: Section Info Error",10,0
+;.Str_RelocError:	dc.b		"FHR: Error Parsing Relocs",10,0 
+;.Str_Reloc:		dc.b		"Reloc Value : %d",10,0

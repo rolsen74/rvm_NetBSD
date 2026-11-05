@@ -1,0 +1,41 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR) r10 = File Start (Header)
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (S64)  r0 = Error (TRUE/FALSE)
+; (STR)  r9 = Error String
+; (PTR) r63 = Temp Stack (4k)
+;
+; Note:
+;
+;   Function decrypt file data. None is supported right now
+;
+
+Func_Exe_Decrypt:
+		vmove.q		#1,r0
+
+		lea		.Str_File_Decrypt,r9
+
+		tst.w		(FHR_Pad2,r10)
+		bne		.Exit
+
+		rclr.q		r0
+		rclr.q		r9
+.Exit:
+		rtst.q		r0
+		rts
+
+.Str_File_Decrypt:	dc.b		"FHR: Unsupported Decrypt Method",10,0

@@ -36,10 +36,10 @@
 #define USPACE_ALIGN	 NBPG
 
 /*
- * Provisional 16-byte stack alignment.  Match this with the GCC
- * ABI, especially at C function call boundaries and trap returns.
+ * RVM GCC's STACK_BOUNDARY is 32 bits.  This describes the compiler ABI;
+ * bootstrap stacks may be aligned more strictly.
  */
-#define STACK_ALIGNBYTES ( 16UL - 1 )
+#define STACK_ALIGNBYTES ( 4UL - 1 )
 
 /* Start with a uniprocessor VM. */
 #define MAXCPUS			 1
@@ -62,7 +62,7 @@
 /*
  * Pending work elsewhere in the port:
  * - Choose a kernel virtual address layout in vmparam.h.
- * - Implement pmap for 64 KiB hardware pages.
+ * - Complete managed/user pmap support for 64 KiB hardware pages.
  * - Register an RVM machine ID if a format/interface requires one.
  * - Implement DELAY() when the virtual timer is available.
  */

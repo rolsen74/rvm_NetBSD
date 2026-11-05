@@ -7,8 +7,8 @@
  *
  * IMPORTANT: The virtual address ranges below are PROVISIONAL.
  * They assume the RVM MMU can translate these addresses and that
- * VMRun and the kernel bootstrap agree on their interpretation.
- * Do not enable user mode or a real pmap until this is verified.
+ * VMEmu and the kernel bootstrap agree on their interpretation.
+ * User mode and managed user mappings are not implemented yet.
  */
 
 #ifndef _RVM_VMPARAM_H_
@@ -30,9 +30,8 @@
  *   user space:  0x0000000000010000 ... 0x00007fffffffffff
  *   kernel VM:   0xffff800000000000 ... 0xffffffffffffffff
  *
- * The gap is intentionally unmapped. Kernel code, direct mappings,
- * device mappings and guard regions must be designed in pmap.c.
- * These are policy choices, not verified hardware limits.
+ * Kernel text and the RAM identity map still occupy low addresses.
+ * The high kernel window below is for dynamically installed wired mappings.
  */
 #define VM_MIN_ADDRESS		  ( (vaddr_t)PAGE_SIZE )
 #define VM_MAXUSER_ADDRESS	  ( (vaddr_t)0x0000800000000000ULL )
@@ -42,10 +41,11 @@
 #define VM_MIN_KERNEL_ADDRESS ( (vaddr_t)0xffff800000000000ULL )
 #define VM_MAX_KERNEL_ADDRESS ( (vaddr_t)0xffffffffffff0000ULL )
 
-/* Reserve the first 16 MiB for bootstrap kernel text/data/BSS. */
+/* Leave space below the wired kernel window for the bootstrap scratch VA. */
 #define VM_KERNEL_RESERVED	  ( 16UL * 1024 * 1024 )
 #define VM_KERNEL_VM_BASE	  ( VM_MIN_KERNEL_ADDRESS + VM_KERNEL_RESERVED )
-#define VM_KERNEL_VM_SIZE	  ( VM_MAX_KERNEL_ADDRESS - VM_KERNEL_VM_BASE )
+/* Preallocate all tables for this initial 256 MiB window before UVM. */
+#define VM_KERNEL_VM_SIZE	  ( 256UL * 1024 * 1024 )
 
 /* Initial resource limits, subject to tuning. */
 #ifndef MAXTSIZ
@@ -77,6 +77,6 @@
 #define VM_NFREELIST						  1
 #define VM_FREELIST_DEFAULT					  0
 
-/* No 32-bit compatibility ABI or direct map is defined at this stage. */
+/* No 32-bit compatibility ABI. The low RAM identity map is temporary. */
 
 #endif /* _RVM_VMPARAM_H_ */

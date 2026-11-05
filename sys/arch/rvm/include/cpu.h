@@ -48,7 +48,8 @@ struct cpu_info
 
 /*
  * One CPU for now.  SMP and per-CPU register access can be added later.
- * Define cpu_info_primary in machdep.c (or a future cpu.c).
+ * The standalone UVM support defines cpu_info_primary; full kernel CPU startup
+ * must replace that bootstrap-only definition.
  */
 extern struct cpu_info cpu_info_primary;
 
@@ -68,7 +69,7 @@ cpu_number ( void )
 	( cii ) == 0;                                                                                                               \
 	( cii )++
 
-static inline int
+static inline bool
 cpu_intr_p ( void )
 {
 	return curcpu ()->ci_intr_depth != 0;

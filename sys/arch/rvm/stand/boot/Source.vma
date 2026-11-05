@@ -1,0 +1,196 @@
+#define _LOCORE
+#include <machine/bootinfo.h>
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+
+	include		"Types.i"
+	include		"FHR.i"
+	include		"CPU.i"
+	include		"EmuFunc.i"
+
+Autostart:
+
+	; NetBSD bring-up: translation, interrupts and caches stay off.
+	rclr.q r0
+	mtctrl r0,cr
+	mtctrl r0,inte
+
+;	rclr.q		r0
+;	mtctrl		r0,inst		; Clear Instuction counter (nice to have)
+;	mtctrl		r0,cr		; Make sure Cache is off
+;	mtctrl		r0,mst		; Make sure MMU is off
+;	mtctrl		r0,inte		; Make sure Interrupts are off
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	jmp		Func_CPU_Setup
+
+.Str:	dc.b		10
+	dc.b		"NetBSD/RVM FHR loader (",__TIMESTAMP__,")",10
+	dc.b		10
+	dc.b		"1: Setup CPU",10
+	dc.b		0
+
+CPU_Setup_Done:
+
+	; Save discovered RAM before the FHR parser uses the scratch registers.
+	lea BootInfo,r0
+	move.q r63,(RVM_BI_RAM_END,r0)
+	rmove.q r63,r1
+	sub.q #65536,r1
+	move.q r1,(RVM_BI_LOADER_STACK,r0)
+
+	lea		EndOfCode,r10
+
+	; (U64)  r8 = Number of Memory Pages
+	; (STR)  r9 = Error String
+	; (PTR) r10 = End of Code / Start of FHR file
+	; (PTR) r63 = Stack Pointer (Upper memory)
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_Init_Valid,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	; Check if its a valid RVM Exe File
+	jsr		Func_Exe_Valid
+	bne		.Exit
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_Init_Decrypt,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	; it may be encrypted, decrypt data
+	jsr		Func_Exe_Decrypt
+	bne		.Exit
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_Init_Unpack,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	; it may be packed/crunched, unpack it
+	jsr		Func_Exe_Unpack
+	bne		.Exit
+
+	; r10 = Unpack may update File Start pointer
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_Init_Size,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	; Calc Exe File End/Size and validate Section info
+	jsr		Func_Exe_GetSize
+	bne		.Exit
+
+	; ------------------
+	; r10 = File Start (Header)
+	; r11 = File End
+	; r12 = File Size
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_Init_Parse,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	jsr		Func_Exe_Parse
+	bne		.Exit
+
+	; ------------------
+	;  r9 = Error String
+	; r10 = File Start
+	; r11 = File End
+	; r12 = File Size
+	; r13 = Start PC
+	; r63 = Temp Stack (4k)
+
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_RunPC,r3
+	vmove.q		#100,r4
+	rmove.q		r13,r5
+	emufunc
+
+	lea BootInfo,r2
+	nop
+	clrz
+	jsr		(r13)
+	setz
+	nop
+
+	rmove.q		r0,r5
+	rmove.q		r0,r6
+	vmove.q		#EMUCMD_PrintString,r2
+	lea		.Str_Return,r3
+	vmove.q		#100,r4
+	emufunc
+
+
+	lea		.Str_Exit,r9
+
+	; ------------------
+	; -- Exit -- Print String
+.Exit:
+	rmove.q		r9,r3		; String
+	beq		.Exit2
+	vmove.q		#EMUCMD_PrintString,r2
+	vmove.q		#-1,r4		; Max Length
+	emufunc
+.Exit2:
+	; ------------------
+	; -- Exit -- Shutdown
+;	halt
+;	nop
+	emuexit
+
+	; ------------------
+
+.Str_Init_Valid:	dc.b		"2: Validating File",10,0
+.Str_Init_Decrypt:	dc.b		"3: Decrypt File",10,0
+.Str_Init_Unpack:	dc.b		"4: Unacpk File",10,0
+.Str_Init_Size:		dc.b		"5: Get File Size",10,0
+.Str_Init_Parse:	dc.b		"6: Parse File",10,0
+.Str_RunPC:		dc.b		"7: Starting Program (PC: $%X)",10,0
+.Str_Exit:		dc.b		10,"--> Normal Exit <--",10,0	
+.Str_Return:		dc.b		"Program Returned %d ($%X)",10,0
+
+	include		"_CPU_Setup.vma"
+	include		"_Exe_Decrypt.vma"
+	include		"_Exe_GetSize.vma"
+#include "_Exe_Parse.vma"
+	include		"_Exe_Valid.vma"
+	include		"_Exe_Unpack.vma"
+	include		"_Mem_Clear.vma"
+	include		"_Mem_Copy.vma"
+	include		"_Reloc_Parse.vma"
+
+
+; Persistent, page-zero loader record. locore passes its address to C in r2.
+	cnop 0,8
+BootInfo:
+	dc.q RVM_BOOTINFO_MAGIC,RVM_BOOTINFO_VERSION,RVM_BOOTINFO_SIZE
+	dc.q 0,0,0,0,0
+	ds.b RVM_BOOTINFO_MAXSECTIONS*RVM_BI_SECTION_SIZE
+
+	dc.b "----"
+
+EndOfCode:
+
+	; Start of FHR File here

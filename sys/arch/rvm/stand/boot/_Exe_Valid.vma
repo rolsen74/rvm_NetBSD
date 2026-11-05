@@ -1,0 +1,73 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (U64)  r8 = Number of Memory Pages
+; (STR)  r9 = Error String
+; (PTR) r10 = End of Code / Start of FHR file
+; (PTR) r63 = Stack Pointer (Upper memory)
+;
+; Output:
+;
+; (S64)  r0 = Error (TRUE/FALSE)
+; (U64)  r8 = Number of Memory Pages
+; (STR)  r9 = Error String
+; (PTR) r10 = End of Code / Start of FHR file
+; (PTR) r63 = Stack Pointer (Upper memory)
+;
+; Note:
+;
+;   Function parses Memory Data, to see if its a FHR Exe file
+;
+
+Func_Exe_Valid:
+		vmove.q		#1,r0
+
+		lea		.Str_File_Header,r9
+		cmp.l		#FHR_HEADER,(FHR_ID,r10)
+		bne		.Exit
+
+		lea		.Str_File_Size,r9
+		cmp.b		#FHR_SIZE_64,(FHR_Size,r10)
+		bne		.Exit
+		
+		lea		.Str_File_Endian,r9
+		cmp.b		#FHR_ENDIAN_Big,(FHR_Endian,r10)
+		bne		.Exit
+
+		lea		.Str_File_Size,r9
+		cmp.b		#FHR_TYPE_Exe,(FHR_Type,r10)
+		bne		.Exit
+
+		lea		.Str_File_OS,r9
+		cmp.w		#FHR_OS_RVM,(FHR_OSType,r10)
+		bne		.Exit
+
+		lea		.Str_File_CPU,r9
+		cmp.w		#FHR_CPU_RVM,(FHR_CPUType,r10)
+		bne		.Exit
+
+		lea		.Str_File_Sec,r9
+		tst.w		(FHR_Sections,r10)
+		beq		.Exit
+
+		rclr.q		r0
+.Exit:
+		rtst.q		r0
+		rts
+
+.Str_File_Header:	dc.b		"FHR: Invalid File Header",10,0
+.Str_File_Size:		dc.b		"FHR: Not a 64bit File",10,0
+.Str_File_Endian:	dc.b		"FHR: Not a Exe File",10,0
+.Str_File_OS:		dc.b		"FHR: Unsupported OS Type",10,0
+.Str_File_CPU:		dc.b		"FHR: Unsupported CPU Type",10,0
+.Str_File_Sec:		dc.b		"FHR: No File Sections",10,0
+

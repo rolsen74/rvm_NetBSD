@@ -3,4 +3,8 @@ maxusers 2 8 64
 
 file arch/rvm/rvm/locore.S
 file arch/rvm/rvm/machdep.c
+file arch/rvm/rvm/earlycons.c
+file arch/rvm/rvm/bootmem.c
+file arch/rvm/rvm/pmap.c
+file arch/rvm/rvm/uvm_machdep.c
 file dev/cons.c

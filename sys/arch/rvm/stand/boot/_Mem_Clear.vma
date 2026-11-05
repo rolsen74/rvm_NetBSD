@@ -1,0 +1,63 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR)  r0 = Memory
+; (U64)  r1 = Length (Unsigned)
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (PTR) r63 = Temp Stack (4k)
+;
+
+Func_Memory_Clear:
+		pushf		r0-r1
+
+		rtst.q		r0
+		beq		.Done		; NULL Pointer check
+		rtst.q		r1
+		bmi		.Done		; Make sure its positive
+
+.Clr16:		vcmp.q		#16,r1
+		bcs		.Clr8		; Src > Dst (Unsigned)
+		vsub.q		#16,r1,r1
+		clr.q		(r0)+
+		clr.q		(r0)+
+		jmp		.Clr16
+
+.Clr8:		vcmp.q		#8,r1
+		bcs		.Clr4		; Src > Dst (Unsigned)
+		vsub.q		#8,r1,r1
+		clr.q		(r0)+
+		jmp		.Clr8
+
+.Clr4:		vcmp.q		#4,r1
+		bcs		.Clr2		; Src > Dst (Unsigned)
+		vsub.q		#4,r1,r1
+		clr.l		(r0)+
+		jmp		.Clr4
+
+.Clr2:		vcmp.q		#2,r1
+		bcs		.Clr1		; Src > Dst (Unsigned)
+		vsub.q		#2,r1,r1
+		clr.w		(r0)+
+		jmp		.Clr2
+
+.Clr1:		vcmp.q		#1,r1
+		bcs		.Done		; Src > Dst (Unsigned)
+;		vsub.q		#1,r1,r1
+		clr.b		(r0)+
+.Done:
+		popf
+		rts
+
+********************************************************

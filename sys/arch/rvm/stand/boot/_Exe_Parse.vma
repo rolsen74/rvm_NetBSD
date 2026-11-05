@@ -1,0 +1,325 @@
+
+**
+** Copyright (c) 2023-2026 by Rene W. Olsen
+** All rights reserved.
+**
+** Assembler source for rVM
+**
+
+********************************************************
+;
+; Input:
+;
+; (PTR) r10 = File Start (Header)
+; (PTR) r11 = File End
+; (U64) r12 = File Size
+; (PTR) r63 = Temp Stack (4k)
+;
+; Output:
+;
+; (S64)  r0 = Error (TRUE/FALSE)
+; (STR)  r9 = Error String
+; (PTR) r10 = File Start (Header)
+; (PTR) r11 = File End
+; (U64) r12 = File Size
+; (PTR) r13 = Start PC
+; (PTR) r63 = Temp Stack (4k)
+;
+; Note:
+;
+;   Extract all File Sections into Memory and handle Relocs
+;
+
+Func_Exe_Parse:
+		; r8 = Error State
+		vmove.q		#1,r8
+
+		; Clear Start PC
+		rclr.q		r13
+
+		; r20 = Get Number of Sections
+		rclr.q		r20
+		move.w		(FHR_Sections,r10),r20
+		beq		.Exit
+		cmp.q #RVM_BOOTINFO_MAXSECTIONS,r20
+		bhi .Exit
+		; Do not overwrite the loader stack with the section array.
+		lea BootInfo,r4
+		move.q (RVM_BI_LOADER_STACK,r4),r5
+		lea (r20.q*8,r11),r6
+		rcmp.q r5,r6
+		bhi .Exit
+		move.q r20,(RVM_BI_NSECTIONS,r4)
+
+		; r21 = Section Info	( End of Header )
+		lea		(FHR_SIZEOF,r10),r21
+
+		; r22 = Hunk Data	( End of SecInfo )
+		vmulu.q		#SECI_SIZEOF,r20,r22	; ( Size.q, Align.w, Flags.w )
+		radd.q		r21,r22,r22
+
+		; r23 = Section Array	( End of File )
+		rmove.q		r11,r23
+
+		; r24 = Free Memory Pointer
+		lea		(r20.q*8,r23),r24
+
+		; r25 = Sec Counter
+		; --
+
+		; r26 = Active Section / Section Memory Adr
+		; --
+
+
+
+
+
+
+		; -----------------
+		; -- Build Sec Array
+
+		; r0 = Mem
+		rmove.q		r24,r0
+
+		; r1 = Sec Array
+		rmove.q		r23,r1
+
+		; r2 = Sec Info
+		rmove.q		r21,r2
+
+		; r9 = Error String
+		lea		.Str_SecInfo,r9
+
+		; r25 = Section Counter
+		rclr.q		r25
+.Loop:
+		; r0 = Align Memory ( MMU Page Aligned )
+
+		add.q		#65535,r0
+		rclr.w		r0
+		move.q		r0,(r1)+
+
+		move.q		(SECI_Size,r2),r3	; Section Size
+		beq		.Exit			; Zero Size 
+		bmi		.Exit			; Negative Size 
+
+		; Validate size before touching section memory. r0 is section start.
+		lea BootInfo,r4
+		move.q (RVM_BI_LOADER_STACK,r4),r5
+		rcmp.q r5,r0
+		bhi .Exit
+		rsub.q r0,r5,r5
+		rcmp.q r5,r3
+		bhi .Exit
+		; Record the relocated section start, size and FHR permissions.
+		vmulu.q #RVM_BI_SECTION_SIZE,r25,r6
+		radd.q r4,r6,r6
+		add.q #RVM_BI_SECTIONS,r6
+		move.q r0,(RVM_BI_SEC_START,r6)
+		move.q r3,(RVM_BI_SEC_SIZE,r6)
+		move.w (SECI_Flags,r2),r4
+		and.q #65535,r4
+		move.q r4,(RVM_BI_SEC_FLAGS,r6)
+		radd.q		r3,r0,r0		; Next Section Addr
+		vadd.q		#SECI_SIZEOF,r2,r2	; Next Section Info ( Size.q, Align.w, Flags.w )
+		vadd.q		#1,r25,r25		; Next Section Count
+
+		rcmp.q		r25,r20
+		bne		.Loop
+
+
+
+
+
+
+		; -----------------
+		; Round the reservation past the last loaded section.
+		add.q #65535,r0
+		rclr.w r0
+		lea BootInfo,r4
+		move.q r0,(RVM_BI_LOADED_END,r4)
+
+		; -- Now Parse Sections
+
+		; r25 = Section Counter
+		rclr.q		r25
+
+		; r26 = Active Section / Section Memory Adr
+		rclr.q		r26
+
+		; r27 = Hunk Data
+		rmove.q		r22,r27
+
+
+
+
+
+		; -----------------
+		; -- Handle Hunk [Main Loop]
+		; Exe File only supprt those (atm)
+.Loop2:
+		move.l		(r27)+,r0
+		cmp.l		#FHR_COD0,r0
+		beq		.COD0
+		cmp.l		#FHR_DAT0,r0
+		beq		.DAT0
+		cmp.l		#FHR_BSS0,r0
+		beq		.BSS0
+		cmp.l		#FHR_END0,r0
+		beq		.END0
+
+		; Hmm unknown hunk, error for now
+		lea		.Str_Hunk_Unknown,r9
+		jmp		.Exit
+
+
+
+
+
+
+		; -----------------
+		; -- Handle Code Section
+.COD0:
+		lea		.Str_Hunk_SecStart,r9
+		rtst.q		r26
+		bne		.Exit
+		move.q		(r25.q*8,r23),r26		; Active Stat / Section Memory Adr
+
+		; -----
+		vmulu.q		#SECI_SIZEOF,r25,r6		; temp SecInfo offset
+		radd.q		r21,r6,r6			; Cur SecInfo
+
+		; -----
+		vadd.q		#10,r27,r0			; Src Memory ( Skip: Size + CRC )
+		rmove.q		r26,r1				; Dst Memory
+		move.q		(SECI_Size,r6),r2		; SecInfo Size
+		jsr		Func_Memory_Copy
+
+		; -----
+		;   r2 = Reloc Adr
+		;  r19 = Section Memory Size
+		;  r20 = Get Number of Sections
+		;  r23 = Section Array
+		;  r26 = Section Memory Adr
+		radd.q		r0,r2,r2			; Relocs
+		move.q		(SECI_Size,r6),r19		; Memory Size
+		jsr		Func_Reloc_Parse
+		bne		.Exit
+
+		; -----
+		rtst.q		r13
+		bne		.COD0_1
+		rmove.q		r26,r13
+.COD0_1:
+		add.q		(r27)+,r27			; Add Size to Pointer
+		jmp		.Loop2
+
+
+
+
+		; -----------------
+		; -- Handle Data Section
+.DAT0:
+		lea		.Str_Hunk_SecStart,r9
+		rtst.q		r26
+		bne		.Exit
+		move.q		(r25.q*8,r23),r26		; Active Stat / Section Memory Adr
+
+		; -----
+		vmulu.q		#SECI_SIZEOF,r25,r6		; temp SecInfo offset
+		radd.q		r21,r6,r6			; Cur SecInfo
+
+		; -----
+		vadd.q		#10,r27,r0			; Src Memory ( Skip: Size + CRC )
+		rmove.q		r26,r1				; Dst Memory
+		move.q		(SECI_Size,r6),r2		; SecInfo Size
+		jsr		Func_Memory_Copy
+
+		; -----
+		;   r2 = Reloc Adr
+		;  r19 = Section Memory Size
+		;  r20 = Get Number of Sections
+		;  r23 = Section Array
+		;  r26 = Section Memory Adr
+		radd.q		r0,r2,r2			; Relocs
+		move.q		(SECI_Size,r6),r19		; Memory Size
+		jsr		Func_Reloc_Parse
+		bne		.Exit
+
+		; -----
+		add.q		(r27)+,r27			; Add Size to Pointer
+		jmp		.Loop2
+
+
+
+
+		; -----------------
+		; -- Handle BSS Section
+.BSS0:
+		lea		.Str_Hunk_SecStart,r9
+		rtst.q		r26
+		bne		.Exit
+		move.q		(r25.q*8,r23),r26		; Active Stat / Section Memory Adr
+
+		; -----
+		vmulu.q		#SECI_SIZEOF,r25,r6		; temp SecInfo offset
+		radd.q		r21,r6,r6
+
+		; -----
+		rmove.q		r26,r0				; Memory Adr
+		move.q		(SECI_Size,r6),r1		; SecInfo Size (Memory_Clear length)
+		jsr		Func_Memory_Clear
+
+		; -----
+		; BSS0 - Do not have a Size Entry
+		jmp		.Loop2
+
+
+
+
+
+		; -----------------
+		; -- Handle Section End
+.END0:
+		lea		.Str_Hunk_SecEnd,r9
+		rtst.q		r26
+		beq		.Exit
+		rclr.q		r26
+
+		; END0 - Do not have a Size Entry
+		vadd.q		#1,r25,r25
+		rcmp.q		r20,r25
+		bne		.Loop2
+
+		; Check Start Pointer
+		lea		.Str_MisCode,r9
+		rtst.q		r13
+		beq		.Exit
+
+		; Flush Data, so Instructions can be run
+		cpusha		#CACHE_LEVEL_1,#CACHE_TYPE_DATA		
+
+		; Exit Successfull
+		rclr.q		r8
+.Exit:
+		rmove.q		r8,r0
+		rts
+
+
+		; -----------------
+		; -- Error Strings
+
+.Str_SecInfo:		dc.b		"FHR: Section Info Error",10,0
+.Str_MisCode:		dc.b		"FHR: No Code Section found",10,0
+.Str_Hunk_Unknown:	dc.b		"FHR: Unknown HUNK",10,0
+.Str_Hunk_SecEnd:	dc.b		"FHR: Unexpected Section END",10,0
+.Str_Hunk_SecStart:	dc.b		"FHR: Unexpected Section Start, Missing END Hunk",10,0
+
+
+
+;.Str_Parse:		dc.b		"RVM: Error Parsing File Sections",10,0
+;.Str_COD0:		dc.b		"Hunk 'COD0'",10,0
+;.Str_DAT0:		dc.b		"Hunk 'DAT0'",10,0
+;.Str_BSS0:		dc.b		"Hunk 'BSS0'",10,0
+;.Str_END0:		dc.b		"Hunk 'END0'",10,0
+;.Str_Loop:		dc.b		": -Loop - : Section Count %d, ID: %x",10,0
