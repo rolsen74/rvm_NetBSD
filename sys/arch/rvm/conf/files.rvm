@@ -1,0 +1,6 @@
+maxpartitions 16
+maxusers 2 8 64
+
+file arch/rvm/rvm/locore.S
+file arch/rvm/rvm/machdep.c
+file dev/cons.c

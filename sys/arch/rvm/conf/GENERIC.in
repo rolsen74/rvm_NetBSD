@@ -1,0 +1,52 @@
+# $NetBSD$
+#
+# GENERIC kernel configuration for the RVM virtual CPU.
+#
+# Initial NetBSD/RVM port configuration.
+# The RVM machine is a 64-bit virtual CPU running under VMRun.
+# This file deliberately excludes Amiga hardware and unimplemented
+# RVM devices. Enable drivers as they are added to files.rvm.
+#
+# TODO: create arch/rvm/conf/std.rvm and implement the machine-dependent
+# files and options it references before running config(1).
+
+include "arch/rvm/conf/std.rvm"
+
+options         INCLUDE_CONFIG_FILE      # Embed configuration in the kernel
+
+# Keep the first kernel small and debuggable.
+maxusers        8
+makeoptions     DEBUG="-g"              # Debug symbols
+#options        DIAGNOSTIC              # Extra kernel consistency checks
+#options        DEBUG                   # Additional debugging checks
+#options        DDB                     # Kernel debugger (needs RVM support)
+
+# Networking (enable when RVM network/clock facilities are ready).
+#options        INET                    # IPv4
+#options        INET6                   # IPv6
+
+# Filesystems. Actual root-device support still needs to be implemented.
+file-system     FFS                     # Berkeley Fast File System
+#file-system    TMPFS                   # Memory-backed filesystem
+#file-system    KERNFS                  # Kernel information filesystem
+#file-system    NFS                     # Network filesystem client
+
+# RVM virtual devices (not yet implemented).
+# The device declarations must also exist in files.rvm.
+#mainbus0       at root
+#cpu0           at mainbus0
+#rvmcons0       at mainbus0             # TODO: virtual console
+#rvmclock0      at mainbus0             # TODO: timer
+#rvmdisk0       at mainbus0             # TODO: virtual disk
+#rvmnet0        at mainbus0             # TODO: virtual network interface
+
+# Basic pseudo-devices (enable when the associated kernel support is ready).
+pseudo-device   loop                    # Loopback network interface
+#pseudo-device  pty                     # Pseudo-terminals
+#pseudo-device  clockctl                # User clock control
+
+# Root device will be selected when storage/root support exists.
+config          netbsd root on ? type ?
+
+# Optional local overrides.
+cinclude        "arch/rvm/conf/GENERIC.local"

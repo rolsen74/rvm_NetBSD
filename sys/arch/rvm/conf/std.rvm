@@ -1,0 +1,31 @@
+# NetBSD/RVM - Standard machine configuration
+#
+# RVM is a custom 64-bit virtual CPU.
+# Initial target: VMRun emulator, single CPU.
+#
+
+machine         rvm
+
+# Standard machine-independent NetBSD options
+include         "conf/std"
+
+# Executable support
+#
+# RVM uses the FHR executable format.
+# EXEC_FHR will be added after the FHR exec loader
+# and its kernel configuration declaration exist.
+#
+# options       EXEC_FHR
+
+# Shell scripts (#! interpreter support)
+options         EXEC_SCRIPT
+
+# Virtual hardware
+#
+# Devices will be declared here once their drivers
+# have been registered in files.rvm.
+#
+# mainbus0      at root
+# cpu0          at mainbus0
+# rvmclock0     at mainbus0
+# rvmcons0      at mainbus0
