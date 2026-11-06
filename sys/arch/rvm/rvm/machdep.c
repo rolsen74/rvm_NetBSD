@@ -14,10 +14,16 @@
 #include <machine/bootamap.h>
 #include <machine/bootanonmap.h>
 #include <machine/switch.h>
+#include <machine/bootsched.h>
+#include <machine/trap.h>
+#include <machine/irq.h>
+#include <machine/bootclock.h>
+#include <machine/boottime.h>
+#include <machine/uarea.h>
 #include <machine/generic.h>
 
 /* 1: C, 2: console, 3: memory, 4: pmap, 5: MMU, 6/7: verified, 8/9: UVM,
- * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts. */
+ * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts, 21: kernel LWP startup, 22: directed MI switching, 23: MI run queues, 24: idle/sleep/wakeup, 25: supervisor trap return, 26: timer IRQ/HALT return, 27: repeating idle deadlines, 28: MI hardclock/callouts, 29: MI uptime, 30: LWP runtime accounting, 31: guarded u-areas, 32: MI LWP VM lifecycle. */
 volatile unsigned long rvm_boot_stage
     __attribute__((section(".data"))) = 0;
 static volatile unsigned int rvm_boot_fault_active
@@ -30,6 +36,30 @@ void (*rvm_boot_vectors[RVM_BOOT_NVECTORS])(void) __aligned(16)
 const char rvm_boot_banner[] = "NetBSD/RVM early bootstrap";
 
 /* Named strings avoid temporary .LC symbols lost by the current FHR tools. */
+const char rvm_msg_lwpvm[] = "RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.\n";
+const char rvm_msg_badlwpvm[] = "MI LWP VM lifecycle verification failed.\n";
+const char rvm_msg_uarea[] = "RVM guarded u-areas ready; LWP stack ownership and release verified.\n";
+const char rvm_msg_baduarea[] = "Guarded u-area verification failed.\n";
+const char rvm_msg_runtime[] = "RVM MI runtime accounting ready; running and sleeping LWP time verified.\n";
+const char rvm_msg_badruntime[] = "LWP runtime accounting verification failed.\n";
+const char rvm_msg_uptime[] = "Bootstrap MI timecounter ready; uptime and timestamp reads verified.\n";
+const char rvm_msg_baduptime[] = "MI timecounter verification failed.\n";
+const char rvm_msg_hardclock[] = "Bootstrap MI clock ready; hardclock ticks and callout deadlines verified.\n";
+const char rvm_msg_badhardclock[] = "MI hardclock/callout verification failed.\n";
+const char rvm_msg_clock[] = "RVM repeating timer wakeups ready; idle deadlines and rearming verified.\n";
+const char rvm_msg_badclock[] = "Repeating timer wakeup verification failed.\n";
+const char rvm_msg_irq[] = "RVM timer interrupt ready; HALT wakeup and interrupt return verified.\n";
+const char rvm_msg_badirq[] = "Timer interrupt verification failed.\n";
+const char rvm_msg_return[] = "RVM supervisor trap return ready; registers, status and stack restored.\n";
+const char rvm_msg_badreturn[] = "Supervisor trap return verification failed.\n";
+const char rvm_msg_idle[] = "RVM MI idle LWP ready; empty queues, sleep and wakeup verified.\n";
+const char rvm_msg_badidle[] = "MI idle LWP verification failed.\n";
+const char rvm_msg_runq[] = "RVM MI run queues ready; runnable selection, yield and worker exit verified.\n";
+const char rvm_msg_badrunq[] = "MI run queue verification failed.\n";
+const char rvm_msg_sched[] = "RVM MI switching ready; resumed LWPs, zombie handoff and reaping verified.\n";
+const char rvm_msg_badsched[] = "Directed MI switch verification failed.\n";
+const char rvm_msg_lwp[] = "RVM kernel LWPs ready; fork setup and MI startup handoff verified.\n";
+const char rvm_msg_badlwp[] = "Kernel LWP startup verification failed.\n";
 const char rvm_msg_sr[] = "\nSupervisor SR: 0x";
 const char rvm_msg_stack[] = "\nKernel stack: 0x";
 const char rvm_msg_range[] = "..0x";
@@ -294,6 +324,88 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	}
 	rvm_boot_stage = 20;
 	rvm_early_puts(rvm_msg_switch);
+	if (!rvm_cpu_lwp_verify()) {
+		rvm_early_puts(rvm_msg_badlwp);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 21;
+	rvm_early_puts(rvm_msg_lwp);
+	if (!rvm_bootsched_verify()) {
+		rvm_early_puts(rvm_msg_badsched);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 22;
+	rvm_early_puts(rvm_msg_sched);
+	if (!rvm_bootsched_runq_verify()) {
+		rvm_early_puts(rvm_msg_badrunq);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 23;
+	rvm_early_puts(rvm_msg_runq);
+	if (!rvm_bootsched_idle_verify()) {
+		rvm_early_puts(rvm_msg_badidle);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 24;
+	rvm_early_puts(rvm_msg_idle);
+	if (!rvm_trap_init() || !rvm_svc_probe() || rvm_trap_count() != 1) {
+		rvm_early_puts(rvm_msg_badreturn);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 25;
+	rvm_early_puts(rvm_msg_return);
+#ifndef RVM_TEST_IRQ_SKIP
+	if (!rvm_timer_irq_verify()) {
+		rvm_early_puts(rvm_msg_badirq);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 26;
+	rvm_early_puts(rvm_msg_irq);
+#ifndef RVM_TEST_CLOCK_SKIP
+	if (!rvm_clock_verify()) {
+		rvm_early_puts(rvm_msg_badclock);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 27;
+	rvm_early_puts(rvm_msg_clock);
+#ifndef RVM_TEST_HARDCLOCK_SKIP
+	if (!rvm_bootclock_verify()) {
+		rvm_early_puts(rvm_msg_badhardclock);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 28;
+	rvm_early_puts(rvm_msg_hardclock);
+#ifndef RVM_TEST_TIMECOUNTER_SKIP
+	if (!rvm_timecounter_verify()) {
+		rvm_early_puts(rvm_msg_baduptime);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 29;
+	rvm_early_puts(rvm_msg_uptime);
+#ifndef RVM_TEST_RUNTIME_SKIP
+	if (!rvm_bootsched_runtime_verify()) {
+		rvm_early_puts(rvm_msg_badruntime);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 30;
+	rvm_early_puts(rvm_msg_runtime);
+	if (!rvm_uarea_verify()) {
+		rvm_early_puts(rvm_msg_baduarea);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 31;
+	rvm_early_puts(rvm_msg_uarea);
+	if (!rvm_lwpvm_verify()) {
+		rvm_early_puts(rvm_msg_badlwpvm);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 32;
+	rvm_early_puts(rvm_msg_lwpvm);
+#endif
+#endif
+#endif
+#endif
+#endif
 }
 
 void

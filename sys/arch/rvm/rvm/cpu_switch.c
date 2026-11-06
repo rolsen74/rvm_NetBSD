@@ -9,6 +9,7 @@
 #include <machine/pmap.h>
 #include <machine/psl.h>
 #include <machine/switch.h>
+#include <machine/uarea.h>
 
 static struct pcb boot_pcb __attribute__((section(".data"))) = { 0 };
 const char rvm_switch_bad[] = "Invalid RVM kernel context switch";
@@ -64,6 +65,7 @@ rvm_cpu_lwp_prepare(struct lwp *l, vaddr_t base, vsize_t size,
 		if (!pmap_extract(pmap_kernel(), va, &pa))
 			return 0;
 	}
+	if (!rvm_uarea_bind(l, base)) return 0;
 	pcb = (struct pcb *)base;
 	memset(pcb, 0, sizeof(*pcb));
 	frame = (uint64_t *)(base + size - RVM_SWITCH_SIZE);
@@ -80,6 +82,7 @@ rvm_cpu_lwp_prepare(struct lwp *l, vaddr_t base, vsize_t size,
 	l->l_md.md_pcb = pcb;
 	l->l_md.md_kstack_base = base + roundup(sizeof(*pcb), 16);
 	l->l_md.md_kstack_size = size - roundup(sizeof(*pcb), 16);
+	l->l_md.md_startup = 0;
 	return 1;
 }
 
@@ -89,10 +92,12 @@ rvm_cpu_lwp_discard(struct lwp *l)
 	if (!mode_ok() || curcpu()->ci_cpl != IPL_NONE || l == NULL ||
 	    l == curlwp || l->l_addr == NULL || l->l_addr == &boot_pcb)
 		return 0;
+	if (!rvm_uarea_unbind(l)) return 0;
 	l->l_addr = NULL;
 	l->l_md.md_pcb = NULL;
 	l->l_md.md_kstack_base = 0;
 	l->l_md.md_kstack_size = 0;
+	l->l_md.md_startup = 0;
 	return 1;
 }
 
@@ -121,13 +126,15 @@ rvm_cpu_switchto(struct lwp *old, struct lwp *next)
 	return rvm_cpu_switch(oldpcb, newpcb, old);
 }
 
-/* Bootstrap first entry. Full kernel LWP creation must add MI lwp_startup(). */
+/* Bootstrap workers enter directly; cpu_lwp_fork workers use MI startup. */
 void __dead
 rvm_cpu_lwp_start(void (*fn)(void *), void *arg, struct lwp *previous)
 {
 	if (!mode_ok() || previous == NULL || previous == curlwp ||
 	    curcpu()->ci_onproc != curlwp || curcpu()->ci_cpl != IPL_SCHED)
 		panic(rvm_switch_bad);
+	if (curlwp->l_md.md_startup != 0)
+		rvm_kernel_lwp_startup(previous, curlwp);
 	fn(arg);
 	panic(rvm_switch_bad); /* Kernel workers must explicitly exit/switch away. */
 }

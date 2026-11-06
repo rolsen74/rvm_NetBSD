@@ -151,6 +151,18 @@ UVM anonymous pages ready; references, zeroing and release verified.
 UVM anonymous maps ready; sparse slots, sharing and release verified.
 UVM anonymous mappings ready; VM entries, shared aliases and detach verified.
 RVM kernel context switching ready; separate LWP stacks and resume verified.
+RVM kernel LWPs ready; fork setup and MI startup handoff verified.
+RVM MI switching ready; resumed LWPs, zombie handoff and reaping verified.
+RVM MI run queues ready; runnable selection, yield and worker exit verified.
+RVM MI idle LWP ready; empty queues, sleep and wakeup verified.
+RVM supervisor trap return ready; registers, status and stack restored.
+RVM timer interrupt ready; HALT wakeup and interrupt return verified.
+RVM repeating timer wakeups ready; idle deadlines and rearming verified.
+Bootstrap MI clock ready; hardclock ticks and callout deadlines verified.
+Bootstrap MI timecounter ready; uptime and timestamp reads verified.
+RVM MI runtime accounting ready; running and sleeping LWP time verified.
+RVM guarded u-areas ready; LWP stack ownership and release verified.
+RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.
 ```
 
 Addresses and condition-code bits can vary. After printing, the CPU halts
@@ -171,7 +183,17 @@ magazine reuse and destruction verification, 17 after anonymous-page
 reference, zeroing and final-release verification, 18 after sparse
 anonymous-map slots, shared references and final wipeout verification, and
 19 after anonymous VM-entry attachment, shared aliases and MI detach, and
-20 after kernel LWP stack switching and resumption. A fatal exception sets it to
+20 after kernel LWP stack switching and resumption, and 21 after kernel
+LWP fork setup and MI first-entry handoff, and 22 after directed MI switches,
+zombie unlock and stack reaping, 23 after MI run-queue selection and yield,
+24 after idle-LWP empty-queue selection and sleep/wakeup, and 25 after
+verified supervisor software-trap return, 26 after timer IRQ/HALT return, and
+27 after repeating timer IRQs wake sleeping LWPs through idle deadlines, and
+28 after MI hardclock ticks and callout deadlines, and 29 after MI
+timecounter uptime and timestamp reads, 30 after MI LWP runtime accounting,
+31 after guarded system-LWP u-area allocation/release, and 32 after the
+MI LWP VM attachment/fork/exit path.
+A fatal exception sets it to
 `0xff`, reports the hardware vector,
 frame version, saved PC and low SR flags, then halts. All 63 non-SP integer
 registers are saved before entering the fatal C handler. These handlers do
@@ -326,7 +348,16 @@ corrupts cross-page reads/writes, including saved register frames on a stack.
 The source correction is in `rvm_VMEmu/src_Emulator/Memory/Mem.c`.
 
 `make test` now defaults to `TEST_SUITE=new`, which selects only the current
-CPU context-switch checks. `TEST_SUITE=context` selects the same scope. Each
+MI LWP VM lifecycle checks. `TEST_SUITE=lwpvm` selects the same scope;
+`TEST_SUITE=uarea` selects guarded stack checks,
+`TEST_SUITE=runtime` selects compiler-division and MI runtime checks, `TEST_SUITE=timecounter` selects uptime checks,
+`TEST_SUITE=hardclock` selects MI tick/callout checks,
+`TEST_SUITE=clock` selects repeating timer wakeup checks,
+`TEST_SUITE=irq` selects one-shot hardware timer IRQ checks,
+`TEST_SUITE=trap` selects supervisor trap-return checks,
+`TEST_SUITE=idle` selects idle/sleep/wakeup, `TEST_SUITE=runq` run queues,
+`TEST_SUITE=switch` selects directed handoffs, `TEST_SUITE=lwp` first-entry
+checks and `TEST_SUITE=context` the earlier stack-switch checks. Each
 probe still performs normal bootstrap initialization before testing the new
 path; the older emulator cases are not rerun by default.
 
@@ -383,7 +414,7 @@ The fixed map-entry store avoids depending on a heap or sleep support. Full kern
 builds exclude the harness and must use normal UVM startup and kernel allocators.
 Startup verifies a two-page buffer, then aligned MI wired and VA-only
 allocations, the bootstrap heap, MI pools, pool caches and anonymous pages,
-reaching stage 20 and printing:
+reaching stage 32 and printing:
 
 ```text
 Early wired allocator ready; zeroed allocation/free verified.
@@ -397,6 +428,18 @@ UVM anonymous pages ready; references, zeroing and release verified.
 UVM anonymous maps ready; sparse slots, sharing and release verified.
 UVM anonymous mappings ready; VM entries, shared aliases and detach verified.
 RVM kernel context switching ready; separate LWP stacks and resume verified.
+RVM kernel LWPs ready; fork setup and MI startup handoff verified.
+RVM MI switching ready; resumed LWPs, zombie handoff and reaping verified.
+RVM MI run queues ready; runnable selection, yield and worker exit verified.
+RVM MI idle LWP ready; empty queues, sleep and wakeup verified.
+RVM supervisor trap return ready; registers, status and stack restored.
+RVM timer interrupt ready; HALT wakeup and interrupt return verified.
+RVM repeating timer wakeups ready; idle deadlines and rearming verified.
+Bootstrap MI clock ready; hardclock ticks and callout deadlines verified.
+Bootstrap MI timecounter ready; uptime and timestamp reads verified.
+RVM MI runtime accounting ready; running and sleeping LWP time verified.
+RVM guarded u-areas ready; LWP stack ownership and release verified.
+RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.
 ```
 
 The emulator tests additionally cover multi-page zeroing, exact ownership,
@@ -857,7 +900,8 @@ u-area, with the PCB at its base and the stack above it. The caller owns the
 LWP and u-area allocation. `rvm_cpu_lwp_discard()` detaches an inactive context;
 the caller can then release the u-area. The entry trampoline validates first
 entry and calls a kernel function; a returning function stops explicitly.
-Full `cpu_lwp_fork()`, MI `lwp_startup()` and normal thread exit are still needed.
+`cpu_lwp_fork()` now selects the MI first-entry handoff described below;
+normal thread exit is still needed.
 
 The public assembly entry passes only the two LWP pointers to its C body.
 This avoids the current compiler allocating an unpadded 17-byte stack home
@@ -871,12 +915,453 @@ checks stack-local values and previous-LWP returns, then releases both stacks.
 The focused emulator suite additionally checks every preserved register with
 distinct patterns in each context, 64 resumptions, selected-`ci_onproc`
 ordering, heap allocation/free on a worker, resource restoration, invalid
-priority, NULL targets, invalid saved SPs and wrong MMU roots. Default
-`make test` runs these seven checks, not the older allocator suites.
+priority, NULL targets, invalid saved SPs and wrong MMU roots.
+`TEST_SUITE=context` runs these seven checks explicitly.
 
 This supplies the low-level kernel stack switch, not a working MI scheduler.
-Next, implement kernel LWP startup/exit integration, interrupt/exception return
-and a timer, alongside the remaining normal kernel initialization dependencies.
+`vm_machdep.c` now supplies the kernel-only `cpu_lwp_fork()` interface. UVM
+must allocate a mapped 128 KiB u-area and install `l_addr` first. Fork builds
+the PCB and first stack frame there without copying the parent's kernel
+stack. User stacks, user address spaces and user trapframes are rejected.
+The trampoline routes these LWPs through a checked boundary to the real
+`lwp_startup()` body from `kern/kern_lwp.c`, then calls the kernel function.
+The standalone build extracts that body unchanged with `stand/lwp_source.py`
+and preserves its license; full kernel builds must link normal `kern_lwp.c`
+instead. No process-table or scheduler implementation is substituted.
+
+First entry requires a running previous LWP with its scheduler spin lock held,
+IPL_SCHED, the MI `ci_mtx_count == -2` convention, and an MPSAFE system LWP
+with no private vmspace. The MI body clears the previous LP_RUNNING bit
+(including the release-store zombie case), unlocks, resets the CPU mutex count,
+and lowers to IPL_NONE. Bootstrap mutexes do not model the scheduler's spin
+count protocol; the probes set its handoff value explicitly. Hardware IRQs
+remain disabled throughout. Non-MPSAFE startup and VM activation are outside
+this bootstrap path.
+
+`cpu_lwp_free()` currently has no lazy coprocessor state to release.
+`cpu_lwp_free2()` clears MD state only for an inactive zombie or unstarted
+LWP, preserving `l_addr` for subsequent UVM u-area release. It cannot reclaim
+the current stack. Returning kernel functions still panic: MI `lwp_exit()`,
+full process-aware reaping, and scheduler exit selection remain pending.
+
+Stage 21 checks live and zombie first-entry handoffs and releases both u-areas.
+The seven `TEST_SUITE=lwp` checks additionally exercise twelve creations with
+heap use on the child, state/lock/IPL checks, and restored memory/map counts
+at 16 and 64 MiB; they reject user-stack requests, non-system children,
+reclamation of a running LWP, and first entry without the scheduler handoff.
+The final image also boots through this stage at 640 MiB.
+
+`bootsched.c` adds a directed cooperative bridge to NetBSD's real `mi_switch()`
+body, selected unchanged from `kern/kern_synch.c` by `stand/synch_source.py`.
+It uses the MI `l_switchto` path with an outgoing LSSLEEP or LSZOMB LWP.
+`rvm_bootsched_switch(next)` installs the selected target and holds the two
+scheduler locks on MI entry. MI drops the run-queue lock, records switch
+counts, transfers through `cpu_switchto()`, and releases the previous LWP's
+last lock on the resumed stack. First entry still uses real `lwp_startup()`.
+A scoped mutex adapter models the MI negative spin count and retains IPL_SCHED
+through the release; it does not change other bootstrap mutex users.
+
+`rvm_bootsched_exit(next)` marks a bootstrap worker as a zombie and performs
+its final MI switch. The resumed LWP clears LP_RUNNING with the MI release
+store; `rvm_bootsched_reap()` then detaches MD state and frees the wired
+u-area from another stack. Up to sixteen workers are tracked, preventing
+reclamation of sleeping/current workers, duplicate reaping and shutdown with
+unreaped workers. `rvm_bootsched_init/fini()` install and remove the temporary
+scheduler locks, restoring the bootstrap LWP's original lock and flags.
+These APIs are standalone scaffolding, not replacements for MI `lwp_exit()`
+or its process/reference/credential cleanup.
+
+This profile does not run soft interrupt LWPs or schedule on timer ticks. Calls into unsupported scheduler branches stop
+explicitly. The clock adapter supplies a fixed epoch with no elapsed-time
+accounting; kernel VM activation checks the shared kernel root and does not
+switch user address spaces. Hardware IRQs stay off in these scheduler paths;
+the isolated timer probe below enables one line temporarily. Normal kernels must
+link the complete `kern_synch.c` and normal services instead of this profile.
+
+Stage 22 switches two workers repeatedly, hands off from each zombie and
+reaps both u-areas. The seven `TEST_SUITE=switch` checks boot at 640 MiB and exercise a
+three-worker ring at 16/64 MiB: 128 real MI switches, live heap buffers and
+stack canaries across resumes, lock/IPL/LP_RUNNING state, switch counters,
+zombie handoffs and complete memory restoration. They also reject use
+without initialization, self-targets, running targets and zombie targets.
+
+The bridge now also supports cooperative selection from real MI run queues.
+`stand/runq_source.py` selects unchanged UP enqueue/dequeue/selection bodies
+from `kern_runq.c`, while the MI switch profile includes its real `nextlwp()`.
+The existing real `lwp_setlock()` and `lwp_eprio()` bodies provide lock transfer
+and effective priority. Bootstrap initialization installs 224 static queue
+heads in `spc_queue`; teardown restores the prior priority/flag state and
+requires no queued or unreaped workers.
+
+`rvm_bootsched_ready(l)` admits a prepared system LWP to the appropriate
+priority queue, rejecting duplicate admission, invalid effective priority,
+unsupported scheduling class and running/zombie targets. The MI bitmap tracks
+nonempty priority queues. `rvm_bootsched_yield()` leaves the current LWP on
+processor when entering MI, so `mi_switch()` enqueues it and chooses the next
+LWP by effective priority. Equal-priority yields rotate in FIFO order. If the
+current LWP is selected again, MI releases both locks without changing stacks;
+the bootstrap lock adapter now handles that path too.
+
+`rvm_bootsched_finish()` performs a zombie switch using queue selection rather
+than a named destination. At least one runnable LWP or an initialized idle
+LWP must remain. Stack reclamation uses the same checked reaper.
+Directed handoffs remain available, but a named target cannot already be on a
+run queue. This is cooperative scheduling with a fixed clock epoch: the
+selected 4BSD per-dispatch hooks are empty, timer tick accounting and automatic
+preemption are not enabled, and only SCHED_OTHER system LWPs are admitted.
+
+Stage 23 runs two queued workers through yield, exit and reaping. The seven
+`TEST_SUITE=runq` checks additionally cover strict priority selection across bitmap
+words, FIFO alternation between equal-priority workers, repeated self
+selection, live heap buffers and stack canaries, exact switch counts and
+empty queues/bitmaps with restored memory at 16/64 MiB. They reject queue
+operations before initialization, exit of the bootstrap owner, yielding at
+IPL_SCHED and an out-of-range effective priority. The final image reaches
+this stage at 640 MiB.
+
+`rvm_bootsched_idle_init(poll, arg)` now creates a separate wired 128 KiB
+u-area and idle LWP, sets LW_IDLE and installs `cpu_idlelwp`. The real MI
+`nextlwp()` can select this LWP when all run queues are empty. The idle LWP
+runs the unchanged `idle_loop()` body from `kern/kern_idle.c`, selected by
+`stand/idle_source.py`, and remains LSIDL instead of entering a run queue.
+The real MI `sched_curcpu_runnable_p()` determines when to switch back to
+runnable work. UP bootstrap lock adapters supply the MI spin-count convention.
+
+`rvm_bootsched_sleep()` leaves the current worker or controller in LSSLEEP
+without enqueueing it. `rvm_bootsched_ready()` can wake it by enqueueing it
+once LP_RUNNING has been cleared on the destination stack. A worker can now
+finish with no runnable destination; MI selects idle and releases the zombie
+before the next event makes another LWP runnable. The reaper still releases
+the worker stack from a different LWP. Teardown also detaches and releases
+the inactive idle u-area and clears `cpu_idlelwp`.
+
+The MD `cpu_idle()` boundary optionally polls a bootstrap event callback. It
+rechecks for runnable work and executes a single hardware HALT if none is
+available. Without a callback it also halts. The wakeup probes use callbacks
+to enqueue sleeping LWPs; they are cooperative event polling, not hardware
+interrupt delivery. Without an active timer source this idle-loop path keeps IRQs disabled.
+With the repeating source below, idle waits admit timer IRQs in a bounded
+assembly window, then deliver deferred wakeups with IRQs disabled again. Running-cpuset publication and background `uvm_idle()`
+work are inactive adapters until normal kernel startup is available. These
+bootstrap sleep/wakeup APIs do not implement MI sleep queues, wait channels,
+timeouts or condition variables.
+
+Stage 24 repeatedly selects idle from empty queues and wakes the controller,
+then restores all memory. The seven `TEST_SUITE=idle` checks include 64 event wakeups
+through the real idle stack at 16/64 MiB, a worker retaining heap and stack
+contents across sleeps, exit with all other LWPs asleep, safe worker/idle
+reclamation and full memory restoration. A separate emulator case reaches
+the HALT boundary exactly once, leaving the controller asleep. Rejection
+cases cover uninitialized sleep, no destination without an idle LWP, and
+calling `cpu_idle()` from the controller. The final image reaches stage 24
+at 640 MiB.
+
+`trap.c` and `rvm_supervisor_entry` now provide a checked returning path for
+one supervisor-only software service on vector 10. Assembly pushes R0-R62
+before calling C and restores the entire image before RTE. The hardware
+version-2 frame follows the 504-byte register area: header at 504, PC at 512,
+and saved MMU root at 520, total 528 bytes. Static ABI checks enforce these
+offsets. The dispatcher checks supervisor mode, version/vector, current LWP
+and stack bounds, shared kernel root, continuation mapping and service ID;
+unknown services and all other faults retain fatal diagnostics.
+
+The probe service uses R0=`RVM_SVC_PROBE`, returns R2 XOR `RVM_SVC_RESULT` in
+R0, and preserves all other GPRs. This bring-up service is separate from the
+NetBSD user syscall ABI. It does not enable hardware IRQs, restore user state,
+recover faults, or switch address spaces. The saved MMU root is validated;
+current VMEmu RTE does not load it into MST/MUT. Logical IPL is restored by C,
+while hardware SR, its interrupt priority, and the PC are restored by RTE.
+
+Emulator source and runtime checks agree that the big-endian first hardware
+word preserves SR flags in bits 0..7 and priority in bits 16..21, alongside
+vector/version in bits 32/48. The status mask in `psl.h` now matches VMEmu's
+six-bit mask. The emulator's interrupt-entry code can produce level 64 for
+IRQ 63, which its ordinary SR mask cannot retain; that highest IRQ line must
+be resolved or avoided before enabling hardware interrupt delivery. This
+step makes no emulator or compiler changes.
+
+Stage 25 performs a real SYSCALL/RTE round trip. Its assembly fixture fills
+all 63 GPRs with distinct patterns, checks the service result, stack pointer,
+all condition flags, and hardware priority 31. The seven `TEST_SUITE=trap` checks repeat
+this across every logical IPL and a scheduled worker stack at 16/64 MiB,
+with heap/stack canaries and restored page counts. Additional fixtures check
+hardware priorities 0 and 63. Unknown services and illegal opcodes remain
+fatal. The image also verifies this path at 640 MiB. VMEmu currently prints
+`Exce_10_SysCall` when executing the software-trap instruction.
+
+`irq.c` now performs a real one-shot GeneralDriver timer interrupt. Timer 1
+is configured on IRQ 60 in `vmemu.conf`, corresponding to vector 92 and
+hardware priority 61. The probe enables only that INTE bit and CR=12 while
+waiting; normal kernel code resumes with CR=8 and INTE=0. Timer control uses
+ACTIVE|INTERRUPT, counter zero and reset two (nominally 40 ms at the GUI's
+20 ms tick). No other device interrupt or cache is enabled.
+
+The version-0 interrupt frame follows a saved CR and all 63 GPRs, total
+536 bytes, with static ABI checks. Entry saves CR, masks hardware interrupts,
+and dispatches C with the shared kernel MMU root. The dispatcher validates
+mode, vector/version, priority, current LWP/stack and the permitted wait PCs;
+it tracks interrupt depth and logical IPL_HIGH only while handling the IRQ.
+It masks INTE immediately and acknowledges GeneralDriver timer bit 0, then
+restores logical IPL/depth. Assembly restores CR/GPRs and uses RTE. The
+return to ordinary C disables hardware interrupts again before checking the
+register image.
+
+VMEmu saves the pre-entry HALT bit in the raw frame, so the handler clears it
+for return. If the IRQ arrived after enabling CR but before executing HALT,
+the saved PC points at the HALT instruction; the handler redirects it to the
+continuation. This prevents a lost wakeup. A deterministic alternate fixture
+waits on a jump at that PC to exercise this early-arrival branch without
+executing HALT. Both paths verify all 63 GPRs, SP and status flags.
+
+This is a one-shot bring-up API, not a periodic NetBSD clock. GeneralDriver
+queues ACK commands to the GUI thread and does not currently expose pending
+or timer register readback. The handler therefore masks the line while its
+ACK is in flight. The completed probe is idempotent and does not rearm and
+risk consuming a stale level. Repeating rearm synchronization is now supplied by the paired source below;
+MI hardclock, arbitrary-PC IRQ handling, nested IRQs and preemption remain
+pending. No emulator or GCC changes were made.
+
+Stage 26 verifies timer delivery, HALT wakeup and return at 640 MiB. The seven
+`TEST_SUITE=irq` checks also deliver the IRQ on a scheduled worker stack at 16/64 MiB,
+preserve heap/stack canaries and restore page/map counts, check the early IRQ
+continuation and reject setup at the wrong logical IPL/CR mode or an invalid
+interrupt frame. Other IRQ vectors remain fatal. The final stopping path
+still masks all interrupts and halts after reporting success.
+
+The repeating source alternates Timer 2 (IRQ 40/vector 72) and Timer 1
+(IRQ 60/vector 92). `vmemu.conf` now assigns Timer 2 to IRQ 40 explicitly;
+RAM remains 10240 pages. Only the current timer's INTE bit is enabled during
+each bounded wait. `rvm_clock_start/wait/stop()` expose the source, while
+`rvm_clock_ticks()` and per-channel event counts record actual serviced IRQs.
+Each wait arms one GUI timer tick, nominally 20 ms (50 Hz), and returns with
+CR=8, INTE=0, zero interrupt depth and the prior register/status image.
+
+Alternation supplies the missing rearm fence without emulator changes. GUI
+commands are consumed in FIFO order: once the opposite timer has fired, the
+previous acknowledgement for the next timer has already been processed.
+Reusing the next line therefore cannot consume its previous asserted level.
+The next channel is preserved across stop/start, including odd-length sessions.
+The one-shot startup probe finishes on Timer 1, so the repeating source begins
+on Timer 2. Stop masks IRQs, disables both timers and queues their ACKs.
+
+`cpu_idle()` now waits on this source when active. After IRQ return it calls
+the bootstrap event callback again, which can enqueue LWPs whose tick deadline
+has expired. The real MI idle loop then selects runnable work normally.
+Wakeup/scheduling does not occur inside the hardware handler. Scheduler
+teardown rejects an active timer source; callers stop it before releasing the
+idle stack. No compiler or emulator rebuild is required.
+
+This is a repeating interrupt-backed wait source, not a free-running NetBSD
+wall clock. Timers are armed at explicit waits, including idle waits; busy
+kernel work still has IRQs disabled, so the counter measures serviced waits
+and cannot account for elapsed busy time. MI `hardclock` and the timing wheel are now connected as described below;
+MI timecounter/uptime publication is connected below; general IRQ critical
+sections, a free-running counter and preemption remain pending.
+The bootstrap scheduler profiles still use their fixed time epoch.
+
+Stage 27 wakes the sleeping controller at four two-tick deadlines through the
+real idle stack. Seven `TEST_SUITE=clock` checks cover the final 640 MiB image and a
+sleeping worker with live heap/stack canaries at 16/64 MiB: 26 actual timer
+IRQs, eight worker deadlines, a later controller deadline, balanced channel
+counts, odd stop/restart sessions and complete memory restoration. An alternate
+fixture exercises early-IRQ continuations repeatedly. Invalid logical IPL/CR
+contexts and unsolicited interrupts outside an armed wait are rejected.
+
+`bootclock.c` now connects serviced timer IRQs to the unchanged MI `hardclock()`
+and `getticks()` bodies selected from `kern/kern_clock.c`. Initialization sets
+bootstrap `hz` to 50. Each repeating-source interrupt calls hardclock at
+logical IPL_HIGH with a supervisor clockframe and interrupt depth one. The MI
+counter advances once, and the real `callout_hardclock()` advances the timing
+wheel and requests deferred dispatch when work is pending. `rvm_bootclock_binuptime()`
+provides a nominal epoch before timecounter setup, then delegates to the
+real MI `binuptime()` service once the timecounter is ready.
+
+`stand/callout_source.py` selects the real MI timing-wheel macros, per-CPU
+layout, scheduling/query/cancellation routines, `callout_hardclock()` and
+`callout_softclock()` from `kern/kern_timeout.c`, preserving its licenses.
+There are four levels of 256 buckets, with static bootstrap CPU storage.
+Checked standard-API wrappers register at most 32 live `callout_t` objects.
+They support MPSAFE initialization, runtime callback assignment, positive
+tick deadlines, reset/schedule, stop, pending/active/expired/invoking queries,
+acknowledgement and destruction. Duplicate initialization, non-MPSAFE flags,
+zero/negative deadlines, scheduling without a callback and destroying pending
+objects stop explicitly. `callout_stop()` retains MI semantics: its return
+reports whether the callout had fired, not whether cancellation was needed.
+
+The softint adapter marks a private pending bit. After IRQ return,
+`rvm_clock_wait()` polls deferred work with CR=8, logical IPL_NONE and zero
+hardware interrupt depth; real `callout_softclock()` invokes callbacks there.
+These callbacks may enqueue sleeping LWPs, change callout schedules or destroy
+their own callout, but blocking timer waits and context switches are rejected.
+This is deferred bootstrap dispatch on the current LWP, not a full MI softint
+LWP implementation. Sleeping `callout_halt()`, SMP migration, and waiters on
+in-flight callbacks are not implemented.
+
+Hardclock's uninitialized dependencies have explicit bootstrap adapters:
+process interval timers, entropy and heartbeat sampling are inactive; the
+statistics adapter counts idle/system CPU ticks only; scheduler clock hooks
+reset their dividers without requesting preemption. Full process accounting,
+profiling, scheduler time-slice behavior and calendar clock setting remain
+pending; MI uptime services are connected below. The timer is still armed only at explicit waits, so busy
+kernel time is not measured. Normal kernel builds must use complete MI
+clock/timeout services instead of these standalone selection profiles.
+
+The nominal-epoch conversion uses the existing FHR assembly normalizer for
+the known general-MUL assembler encoding issue. No toolchain or emulator
+source changes are needed.
+
+Stage 28 wakes the sleeping controller via a real three-tick MI callout.
+Seven `TEST_SUITE=hardclock` checks also exercise IRQ-driven reset/cancel/rearm, callback
+self-destruction and deferred deadlines at 16/64 MiB, with restored free-page
+counts. A deterministic test emulates hardclock context for 1000 MI ticks to
+cross the 256/257/512 timing-wheel boundaries and move queued deadlines earlier
+and later; this case does not claim 1000 hardware IRQs. Rejection cases cover
+zero deadlines, destruction while pending, and non-MPSAFE callouts. The final
+image boots through stage 28 at 640 MiB.
+
+`stand/timecounter_source.py` now selects the real MI timecounter read,
+registration, windup, counter-selection and tick-publication bodies from
+`kern/kern_tc.c`. Runtime setup links ten static timehands and installs a
+50 Hz counter backed by `getticks()`. Function pointers and links are assigned
+at runtime for FHR compatibility. The MI windup publishes cached timestamps
+and `time_uptime`/`time_second`; uptime follows NetBSD's initial one-second
+convention. Binary, microsecond and nanosecond uptime reads, their cached
+variants, and boot/time reads use the MI generation and scaling algorithms.
+
+Timer hardclock updates wind the timecounter before deferred callouts run.
+Idle/switch timestamp reads now use the same uptime service, and the real
+MI run-queue operations read `getticks()` instead of a constant zero. LWP
+runtime accumulation is enabled below; full process accounting remains pending. The newly needed producer/consumer barriers use the same
+checked UP compiler-fence implementation as the existing release barrier:
+only one CPU, caches off, and hardware IRQs masked before reaching C.
+
+Registration is checked and bounded to four live counters, with nonzero
+frequency (at most 1 GHz), a contiguous low-bit mask and no PPS hook. Counter
+replacement uses the real MI quality/frequency selection and preserves uptime.
+Detach, NTP/adjtime, PPS, RTC/calendar setting and SMP are not enabled;
+`tc_setclock()` stops explicitly. Calendar-time reads currently reflect the
+unset boot epoch and do not represent the real date. The counter advances
+only for serviced timer waits, so it still cannot measure elapsed busy kernel
+time. A free-running hardware source and normal kernel clock startup remain
+necessary.
+
+Stage 29 checks real-IRQ uptime and timestamp conversions at 640 MiB. Seven
+`TEST_SUITE=timecounter` checks also compare cached/live reads on scheduled worker stacks at
+16/64 MiB, preserve nested `l_tcgen` state, check scheduler tick accumulation
+and restore memory. Deterministic tests switch between independent 8-bit and
+32-bit counters, exercise wraparound and second crossings, and rotate MI
+timehands repeatedly. Rejection cases cover duplicate registration, zero
+frequency and unsupported calendar setting.
+
+These checks exposed a separate GCC scalar division constraint bug: for the
+general (non-fast) DIV form, the dividend was not tied to the destination,
+so e.g. a divide-by-1000 could use a stale destination register. The eight
+signed/unsigned scalar patterns are corrected in
+`../rvm_gcc/_data/work_gcc-14.3.0/gcc/config/rvm/rvm-inst.md`; compiler Makefiles
+are unchanged. The rebuilt installed GCC is now validated: generated code
+includes the required copy, runtime tests cover signed/unsigned 32/64-bit
+immediate and memory division, and the timestamp reference again divides by
+a literal 1000. `compiler_check.py` rejects the known missing-copy pattern.
+The port image was clean-rebuilt with the updated compiler at -O2.
+
+The switch profile now includes the unchanged MI `updatertime()` body from
+`kern/kern_synch.c`, replacing the no-op runtime hook. On each MI switch it
+accumulates `now - l_stime` in `l_rtime`, while MI stamps the selected LWP's
+new start time. Sleeping LWPs do not accrue time between switches, and the
+MI helper explicitly excludes LW_IDLE. These are serviced-clock runtimes:
+they reflect the current tick-backed source, not unmeasured busy wall time.
+The bootstrap's limited diagnostic ABI turns a backwards-clock report into a
+fatal diagnostic instead of invoking the long MI warning format.
+
+When moving from the early zero-based clock to MI's one-second uptime base,
+timecounter initialization first commits the current LWP's pending runtime
+and then rebases its `l_stime`. This preserves already elapsed runtime and
+prevents the epoch offset from being charged to the thread. Later counter
+replacements retain the normal MI continuous uptime behavior.
+
+Stage 30 verifies a running worker's runtime and excludes sleeping controller
+and idle time, then restores all allocated stacks. The seven `TEST_SUITE=runtime` checks
+also validate the rebuilt compiler's division paths, account for two workers
+and an idle LWP at 16/64 MiB, check CPU tick classifications and memory
+restoration, rerun the original immediate-division timestamp case, test the
+epoch transition with pending time, and reject a backwards clock. The final
+640 MiB image reaches stage 30. No new compiler source changes were needed
+in this step.
+
+The MD `cpu_uarea_alloc(bool)` / `cpu_uarea_free(void *)` hooks now back system
+LWPs, with `__HAVE_CPU_UAREA_ROUTINES` advertised for UVM integration.
+`uarea.c` reserves three pages through the real MI VA-only kernel allocator:
+one unmapped guard below the existing 128 KiB (two-page) u-area. A resident
+object owns two zeroed, wired physical pages, mapped supervisor read/write
+without execute permission. At most sixteen such allocations can be live.
+User allocation requests return NULL for MI fallback; user pmap/thread support
+is still pending. Unknown free addresses return false so MI can free its own
+allocations normally.
+
+MD context preparation (or the MI attachment boundary below) binds the
+guarded allocation to its LWP. MD discard or
+`cpu_lwp_free2()` unbinds it only after it is inactive; freeing a still-bound
+u-area stops before unmapping anything. The bootstrap reaper then uses the CPU
+free hook and preserves the ordinary wired-stack fallback. Idle construction
+now uses guarded u-areas too, and teardown releases its inactive u-area through
+the same ownership path. Failure after allocating only one physical page rolls
+back mappings, object/page ownership and the full VA reservation. Independently
+installed aliases are detected and preserved rather than overwritten.
+
+The public allocation entry uses a small assembly adapter for the existing
+compiler bool-argument home alignment limitation: it canonicalizes the bool
+and calls a C body with a four-byte argument home. This preserves the normal
+MI signature and requires no compiler change. The PCB remains at u-area offset
+zero with the stack above it; the guard catches crossing the lower u-area
+boundary, after the PCB region. The initial boot stack remains static.
+
+Stage 31 schedules a guarded worker, handles a timer IRQ on that stack, and
+releases it through MD/reaper ownership. Seven `TEST_SUITE=uarea` checks also test all
+sixteen slots, zeroing, PTE permissions, repeated worker allocation/reaping and
+restored physical/map counts at 16/64 MiB. Hardware cases fault on guard access
+(vector 5, MMU enable/present) and stack execution (vector 2). A running worker
+cannot free its own u-area. A low-memory case repeatedly forces the second page
+to fail and verifies full rollback. The final image reaches stage 31 at 640 MiB.
+
+These hooks currently use the standalone bounded UVM/object services. Full
+MI `kthread_create()` still needs process/credential/PID initialization,
+normal u-area pool caches, and the full LWP exit/reaping path. Those services
+are not replaced by bootstrap thread-creation stubs.
+
+`stand/lwpvm_source.py` now selects the unchanged `uvm_lwp_getuarea()`,
+`uvm_lwp_setuarea()`, `uvm_lwp_fork()` and `uvm_lwp_exit()` bodies from
+`uvm/uvm_glue.c`. Checked bootstrap boundaries validate their lifecycle.
+System u-area allocation currently delegates directly to the guarded CPU
+allocator, with a plain wired allocation fallback on release; the normal MI
+u-area pool caches are still pending.
+
+Attachment claims a guarded u-area immediately, preventing another LWP from
+attaching it or a direct allocator free while it is attached. MI fork then
+calls the existing MD fork setup; binding the same LWP is idempotent across
+those two steps. An unattached allocation can be freed directly, and an
+attached but never-forked LWP can exit through the MI path. A prepared LWP must
+first pass MD teardown (`cpu_lwp_free2()`), remain off-CPU, and be LSIDL or
+LSZOMB before UVM release. MI exit uses the system free backend; the checked
+boundary then clears `l_addr` in all builds so repeated exit is rejected.
+
+Idle creation now uses the MI allocation/attachment/fork interfaces, while
+idle teardown and the bootstrap reaper use MI exit after MD teardown. Plain
+wired bootstrap u-areas remain supported without confusing them with guarded
+VA-only reservations. User u-areas, full `lwp_create` process
+initialization, u-area caches and full MI thread-exit bookkeeping remain outside
+this selected glue path. Stack-magic instrumentation is not enabled in this
+bootstrap build.
+
+Stage 32 creates, runs and reaps a guarded worker through these MI interfaces.
+Seven default checks additionally exercise unattached and never-started
+cleanup, guarded/plain wired fallback, timer IRQ and supervisor-trap return on
+worker stacks, repeated reuse and restored map/page counts at 16/64 MiB.
+Rejection cases cover duplicate attachment, exit before MD teardown, repeated
+exit and attaching one guarded allocation to two LWPs. The final image reaches
+stage 32 at 640 MiB.
+
+Next, implement normal scheduler and LWP exit integration, general interrupt dispatch
+and normal clock/softint startup with a free-running source, alongside the remaining normal kernel initialization dependencies.
 Object pagers, managed mapping/PV
 tracking and the remaining pmap API also remain necessary. Add kernel
 build glue, missing machine interfaces, interrupt priority operations,

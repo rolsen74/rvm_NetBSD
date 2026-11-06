@@ -34,6 +34,7 @@
 #define UPAGES			 2
 #define USPACE			 ( UPAGES * NBPG )
 #define USPACE_ALIGN	 NBPG
+#define UAREA_PCB_OFFSET 0
 
 /*
  * RVM GCC's STACK_BOUNDARY is 32 bits.  This describes the compiler ABI;

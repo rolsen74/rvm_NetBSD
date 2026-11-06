@@ -15,8 +15,8 @@ def main():
     parser.add_argument('--cross', required=True)
     parser.add_argument('--vmasm', default='VMAsm')
     parser.add_argument('--vmemu', default='VMEmu')
-    parser.add_argument('--suite', choices=('new', 'context', 'full'), default='new',
-                        help='new/context: current CPU work only; full: all regressions')
+    parser.add_argument('--suite', choices=('new', 'lwpvm', 'uarea', 'runtime', 'timecounter', 'hardclock', 'clock', 'irq', 'trap', 'idle', 'runq', 'switch', 'lwp', 'context', 'full'), default='new',
+                        help='new/lwpvm: MI LWP VM lifecycle; uarea: guarded stacks; runtime: compiler and accounting; timecounter: MI uptime; hardclock: ticks and callouts; clock: repeating wakeups; irq/trap/idle/runq/switch/lwp/context: earlier CPU work; full: all regressions')
     args = parser.parse_args()
     obj = args.objdir.resolve()
     root = Path(__file__).resolve().parents[4]
@@ -65,14 +65,24 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='netbsd-rvm-test-') as tmp:
         work = Path(tmp)
-        def build_wrapper(body, assembly='', preload=False, extra_objects=()):
+        def build_wrapper(body, assembly='', preload=False, extra_objects=(), trap_probe=None, irq_skip=False, irq_probe=None, clock_skip=False, clock_probe=None, hardclock_skip=False, timecounter_skip=False, runtime_skip=False):
             source = '#define RVM_TEST_PRELOAD_ONLY\n' if preload else ''
+            if irq_skip:
+                source += '#define RVM_TEST_IRQ_SKIP\n'
+            if clock_skip:
+                source += '#define RVM_TEST_CLOCK_SKIP\n'
+            if hardclock_skip:
+                source += '#define RVM_TEST_HARDCLOCK_SKIP\n'
+            if timecounter_skip:
+                source += '#define RVM_TEST_TIMECOUNTER_SKIP\n'
+            if runtime_skip:
+                source += '#define RVM_TEST_RUNTIME_SKIP\n'
             source += '#define rvm_early_init rvm_normal_early_init\n'
             source += '#include "' + str(root / 'sys/arch/rvm/rvm/machdep.c') + '"\n'
             source += '#undef rvm_early_init\n' + body
             (work / 'wrapper.c').write_text(source)
             subprocess.run(compiler + ['-c', str(work / 'wrapper.c'), '-o', str(work / 'machdep.o')], check=True)
-            objects = [obj / 'locore.o', obj / 'cpuswitch.o', obj / 'cpu_switch.o', work / 'machdep.o', obj / 'earlycons.o',
+            objects = [obj / 'locore.o', obj / 'cpuswitch.o', obj / 'cpu_switch.o', obj / 'vm_machdep.o', obj / 'lwp_startup.o', obj / 'bootsched.o', obj / 'mi_switch.o', obj / 'runq.o', obj / 'idle_loop.o', obj / 'trap.o', trap_probe or obj / 'trap_probe.o', obj / 'irq.o', irq_probe or obj / 'irq_probe.o', clock_probe or obj / 'clock_probe.o', obj / 'bootclock.o', obj / 'hardclock.o', obj / 'callout.o', obj / 'timecounter.o', obj / 'uarea.o', obj / 'lwpvm.o', work / 'machdep.o', obj / 'earlycons.o',
                        obj / 'bootmem.o', obj / 'pmap.o', obj / 'uvm_machdep.o',
                        obj / 'uvm_bootstrap.o', obj / 'uvm_support.o', obj / 'bootalloc.o',
                        obj / 'bootmap.o', obj / 'bootobject.o', obj / 'bootkm.o',
@@ -91,6 +101,556 @@ def main():
             subprocess.run([args.cross + 'ld', '-e', '_start', '-o', str(work / 'netbsd.fhr')]
                            + [str(path) for path in objects], check=True)
             configure(work, 256)
+
+        if args.suite in ('new', 'lwpvm', 'full'):
+            vm_ready = 'RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert vm_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final kernel reaches MI LWP VM lifecycle (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'lwpvm.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI u-area attachment, fork, exit and fallback verified.' in out, out
+                print(f'PASS: MI attach/fork/exit, unattached/unstarted cleanup, guarded/plain stacks and reuse ({pages * 64} KiB)', flush=True)
+            for operation in (
+                'uvm_lwp_setuarea(&first, base);',
+                'uvm_lwp_fork(curlwp, &first, NULL, 0, entry, NULL); uvm_lwp_exit(&first);',
+                'uvm_lwp_exit(&first); uvm_lwp_exit(&first);',
+                'uvm_lwp_setuarea(&second, base);',
+            ):
+                body = r'''
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <sys/proc.h>
+#include <uvm/uvm.h>
+static struct lwp first __attribute__((section(".data"))) = { 0 };
+static struct lwp second __attribute__((section(".data"))) = { 0 };
+static struct proc process __attribute__((section(".data"))) = { 0 };
+static void __used entry(void *arg __unused) { rvm_boot_stop(); }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    vaddr_t base = uvm_uarea_system_alloc(NULL);
+    first.l_cpu = curcpu(); first.l_proc = &process; first.l_stat = LSIDL;
+    first.l_flag = LW_SYSTEM; first.l_pflag = LP_MPSAFE;
+    second.l_cpu = curcpu(); second.l_proc = &process; second.l_stat = LSIDL;
+    second.l_flag = LW_SYSTEM; second.l_pflag = LP_MPSAFE;
+    uvm_lwp_setuarea(&first, base);
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert vm_ready in out and 'NetBSD/RVM UVM panic: Invalid bootstrap MI LWP u-area lifecycle' in out, out
+                print('PASS: MI LWP u-area boundary rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('uarea', 'full'):
+            ua_ready = 'RVM guarded u-areas ready; LWP stack ownership and release verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert ua_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final kernel reaches guarded u-area lifecycle (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'uarea.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM guarded u-area zeroing, lifetime and reuse verified.' in out, out
+                print(f'PASS: guarded u-area capacity, zeroing, PTEs, worker execution, reaping and reuse ({pages * 64} KiB)', flush=True)
+            for operation, vector in (
+                ('*(volatile uint64_t *)(base - PAGE_SIZE) = 1;', 5),
+                ('((void (*)(void))base)();', 2),
+            ):
+                body = r'''
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    vaddr_t base = (vaddr_t)cpu_uarea_alloc(true);
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert ua_ready in out and f'fatal startup exception: vector 0x{vector:016x}' in out, out
+                print(f'PASS: guarded stack enforces MMU protection (vector {vector})', flush=True)
+            build_wrapper(r'''
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <sys/proc.h>
+#include <machine/bootsched.h>
+static struct lwp child __attribute__((section(".data"))) = { 0 };
+static struct proc process __attribute__((section(".data"))) = { 0 };
+static void entry(void *arg __unused) { cpu_uarea_free(curlwp->l_addr); }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_bootsched_init();
+    child.l_addr = cpu_uarea_alloc(true); child.l_cpu = curcpu();
+    child.l_proc = &process; child.l_stat = LSIDL;
+    child.l_flag = LW_SYSTEM; child.l_pflag = LP_MPSAFE;
+    cpu_lwp_fork(curlwp, &child, NULL, 0, entry, NULL);
+    rvm_bootsched_ready(&child); rvm_bootsched_yield();
+}
+''')
+            out = run(work)
+            assert ua_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM guarded u-area ownership' in out, out
+            print('PASS: guarded u-area cannot be freed by its running LWP', flush=True)
+            build_wrapper((Path(__file__).parent / 'uarea_lowmem.c').read_text())
+            out = run(work)
+            assert 'RVM guarded u-area partial allocation rollback verified.' in out, out
+            print('PASS: second-page failure rolls back object, pages, PTEs and VA reservation', flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('runtime', 'full'):
+            runtime_ready = 'RVM MI runtime accounting ready; running and sleeping LWP time verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert runtime_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final rebuilt kernel reaches MI runtime accounting (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'division.c').read_text())
+            out = run(work)
+            assert 'RVM signed/unsigned division input constraints verified.' in out, out
+            print('PASS: rebuilt GCC signed/unsigned 32/64-bit immediate and memory division', flush=True)
+            build_wrapper((Path(__file__).parent / 'runtime.c').read_text(), runtime_skip=True)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI LWP runtime, sleeping exclusion and idle accounting verified.' in out, out
+                print(f'PASS: LWP runtime, sleeping/idle exclusion, CPU tick classification and cleanup ({pages * 64} KiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'timecounter.c').read_text(), timecounter_skip=True)
+            configure(work, 1024)
+            out = run(work)
+            assert 'RVM MI uptime, cached timestamps and worker reads verified.' in out, out
+            print('PASS: original immediate-divide timestamp reference after compiler rebuild', flush=True)
+            build_wrapper(r'''
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <machine/boottime.h>
+#include <machine/bootclock.h>
+#include <machine/bootsched.h>
+#include <machine/irq.h>
+const char rebase_ok[] = "RVM runtime epoch rebase preserves pending time.\n";
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    struct bintime expected;
+    rvm_normal_early_init(bi);
+    if (!rvm_bootsched_init()) rvm_boot_stop();
+    rvm_bootsched_yield(); expected = curlwp->l_rtime;
+    if (!rvm_clock_start() || !rvm_clock_wait() || !rvm_clock_wait() || !rvm_clock_stop()) rvm_boot_stop();
+    bintime_addx(&expected, 2 * (UINT64_MAX / RVM_CLOCK_HZ + 1));
+    if (!rvm_timecounter_init() || !bintimecmp(&curlwp->l_rtime, &expected, ==)) rvm_boot_stop();
+    rvm_bootsched_yield();
+    if (!bintimecmp(&curlwp->l_rtime, &expected, ==) || !rvm_bootsched_fini()) rvm_boot_stop();
+    rvm_early_puts(rebase_ok);
+}
+''', timecounter_skip=True)
+            out = run(work)
+            assert 'RVM runtime epoch rebase preserves pending time.' in out, out
+            print('PASS: MI timecounter epoch change commits pending runtime without charging the epoch offset', flush=True)
+            build_wrapper(r'''
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <machine/bootsched.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_bootsched_init();
+    curlwp->l_stime.sec += 10; rvm_bootsched_yield();
+}
+''', runtime_skip=True)
+            out = run(work)
+            assert 'NetBSD/RVM UVM panic: RVM LWP runtime clock moved backwards' in out, out
+            print('PASS: bootstrap runtime accounting rejects a backwards clock', flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('timecounter', 'full'):
+            tc_ready = 'Bootstrap MI timecounter ready; uptime and timestamp reads verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert tc_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final kernel reaches MI timecounter uptime (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'timecounter.c').read_text(), timecounter_skip=True)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI uptime, cached timestamps and worker reads verified.' in out, out
+                print(f'PASS: real IRQ uptime, cached/live reads, conversions, LWP generations and scheduler tick accounting ({pages * 64} KiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'tc_wrap.c').read_text(), timecounter_skip=True)
+            out = run(work)
+            assert 'RVM MI timecounter narrow/32-bit wraps and timehands rotation verified.' in out, out
+            print('PASS: MI timecounter replacement, 8/32-bit wrap, second crossings and timehands generations', flush=True)
+            for operation in (
+                'tc_init(timecounter);',
+                'bad.tc_counter_mask = 255; bad.tc_get_timecount = read_bad; bad.tc_name = name; tc_init(&bad);',
+                'struct timespec ts = { 0, 0 }; tc_setclock(&ts);',
+            ):
+                body = r'''
+#include <sys/time.h>
+#include <sys/timetc.h>
+#include <machine/boottime.h>
+static struct timecounter bad __attribute__((section(".data"))) = { 0 };
+const char name[] = "invalid";
+static u_int __used read_bad(struct timecounter *tc __unused) { return 0; }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_timecounter_init();
+''' + operation + '\n}\n'
+                # Some rejection cases intentionally do not use the dummy counter.
+                body = body.replace('static struct timecounter bad ', 'static struct timecounter bad __used ')
+                build_wrapper(body, timecounter_skip=True)
+                out = run(work)
+                assert 'NetBSD/RVM UVM panic: Invalid bootstrap MI timecounter operation' in out, out
+                print('PASS: bootstrap timecounter rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('hardclock', 'full'):
+            hc_ready = 'Bootstrap MI clock ready; hardclock ticks and callout deadlines verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert hc_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final kernel reaches MI hardclock and callouts (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'hardclock.c').read_text(), hardclock_skip=True)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI hardclock, callout lifetime and callback deadlines verified.' in out, out
+                print(f'PASS: real IRQ hardclock, reset/cancel/rearm, self-destroy and deferred wakeup ({pages * 64} KiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'callwheel.c').read_text(), hardclock_skip=True)
+            out = run(work)
+            assert 'RVM MI callout wheel boundaries and rescheduling verified.' in out, out
+            print('PASS: deterministic MI timing wheel: 1000 ticks, 256/257/512 boundaries and earlier/later reset', flush=True)
+            for operation in (
+                'callout_init(&target, CALLOUT_MPSAFE); callout_reset(&target, 0, entry, NULL);',
+                'callout_init(&target, CALLOUT_MPSAFE); callout_reset(&target, 3, entry, NULL); callout_destroy(&target);',
+                'callout_init(&target, 0);',
+            ):
+                body = r'''
+#include <sys/callout.h>
+#include <machine/bootclock.h>
+static callout_t target __attribute__((section(".data"))) = { 0 };
+static void entry(void *arg __unused) { }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_bootclock_init();
+''' + operation + '\n}\n'
+                # The non-MPSAFE case otherwise leaves the fixture callback unused.
+                body = body.replace('static void entry(', 'static void __used entry(')
+                build_wrapper(body, hardclock_skip=True)
+                out = run(work)
+                assert 'NetBSD/RVM UVM panic: Invalid bootstrap MI callout operation' in out, out
+                print('PASS: bootstrap callouts reject ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('clock', 'full'):
+            clock_ready = 'RVM repeating timer wakeups ready; idle deadlines and rearming verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert clock_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: kernel boots through repeating idle timer wakeups (640 MiB)', flush=True)
+            clock_body = (Path(__file__).parent / 'clock.c').read_text()
+            build_wrapper(clock_body, clock_skip=True)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM repeated timer IRQs, idle deadlines and restart verified.' in out, out
+                print(f'PASS: 26 alternating IRQs, worker/owner deadlines, odd stop/restart and cleanup ({pages * 64} KiB)', flush=True)
+            fixture = (root / 'sys/arch/rvm/rvm/clock_probe.vma').read_text()
+            fixture = fixture.replace('        halt\n', '        jmp rvm_clock_halt_pc\n')
+            (work / 'clock_probe.vma').write_text(fixture)
+            subprocess.run([args.vmasm, '-i', str(work / 'clock_probe.vma'), '-o', str(work / 'clock_probe.o'), '--obj'],
+                           check=True, stdout=subprocess.DEVNULL)
+            build_wrapper(clock_body, clock_skip=True, clock_probe=work / 'clock_probe.o')
+            out = run(work)
+            assert 'RVM repeated timer IRQs, idle deadlines and restart verified.' in out, out
+            print('PASS: repeated early IRQs preserve both timer continuations and registers', flush=True)
+            for operation in (
+                'splsched(); int accepted = rvm_clock_wait() || rvm_clock_stop(); spl0(); if (accepted) rvm_boot_stop();',
+                'rvm_irq_set_cr(12); int accepted = rvm_clock_wait() || rvm_clock_stop(); rvm_irq_set_cr(8); if (accepted) rvm_boot_stop();',
+            ):
+                body = r'''
+#include <sys/lwp.h>
+#include <sys/cpu.h>
+#include <machine/irq.h>
+const char rejected[] = "RVM repeating timer rejected invalid context.\n";
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    if (!rvm_clock_start()) rvm_boot_stop();
+''' + operation + '\n if (!rvm_clock_stop()) { rvm_boot_stop(); }\n rvm_early_puts(rejected);\n}\n'
+                build_wrapper(body, clock_skip=True)
+                out = run(work)
+                assert 'RVM repeating timer rejected invalid context.' in out and 'UVM panic:' not in out, out
+                print('PASS: repeating timer rejects ' + operation, flush=True)
+            build_wrapper(r'''
+#include <machine/irq.h>
+static struct rvm_irqframe invalid __attribute__((section(".data"))) = { 0 };
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_clock_start(); rvm_timer_irq_dispatch(&invalid);
+}
+''', clock_skip=True)
+            out = run(work)
+            assert 'NetBSD/RVM UVM panic: Invalid RVM timer interrupt frame' in out, out
+            print('PASS: repeating timer rejects an unsolicited interrupt outside a wait', flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('irq', 'full'):
+            irq_ready = 'RVM timer interrupt ready; HALT wakeup and interrupt return verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert irq_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final kernel wakes from HALT via timer IRQ 60 (640 MiB)', flush=True)
+            irq_body = (Path(__file__).parent / 'irq.c').read_text()
+            build_wrapper(irq_body, irq_skip=True)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM timer IRQ worker stack, registers and cleanup verified.' in out, out
+                print(f'PASS: hardware IRQ on worker stack, 63 GPRs, SR, SP, masking and cleanup ({pages * 64} KiB)', flush=True)
+            fixture = (root / 'sys/arch/rvm/rvm/irq_probe.vma').read_text()
+            fixture = fixture.replace('        halt\n', '        jmp rvm_timer_halt_pc\n')
+            (work / 'irq_probe.vma').write_text(fixture)
+            subprocess.run([args.vmasm, '-i', str(work / 'irq_probe.vma'), '-o', str(work / 'irq_probe.o'), '--obj'],
+                           check=True, stdout=subprocess.DEVNULL)
+            build_wrapper('#define RVM_TEST_IRQ_EARLY\n' + irq_body, irq_skip=True, irq_probe=work / 'irq_probe.o')
+            out = run(work)
+            assert 'RVM timer IRQ worker stack, registers and cleanup verified.' in out, out
+            print('PASS: IRQ before HALT skips the wait and restores the continuation', flush=True)
+            for operation in (
+                'splsched(); if (rvm_timer_irq_verify()) rvm_boot_stop(); spl0();',
+                'rvm_irq_set_cr(12); int accepted = rvm_timer_irq_verify(); rvm_irq_set_cr(8); if (accepted) rvm_boot_stop();',
+            ):
+                body = r'''
+#include <sys/lwp.h>
+#include <sys/cpu.h>
+#include <machine/irq.h>
+const char rejected[] = "RVM timer setup rejected invalid context.\n";
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+''' + operation + '\n rvm_early_puts(rejected);\n}\n'
+                build_wrapper(body, irq_skip=True)
+                out = run(work)
+                assert 'RVM timer setup rejected invalid context.' in out and 'UVM panic:' not in out, out
+                print('PASS: timer setup rejects ' + operation, flush=True)
+            build_wrapper(r'''
+#include <machine/irq.h>
+static struct rvm_irqframe invalid __attribute__((section(".data"))) = { 0 };
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_timer_irq_dispatch(&invalid);
+}
+''', irq_skip=True)
+            out = run(work)
+            assert 'NetBSD/RVM UVM panic: Invalid RVM timer interrupt frame' in out, out
+            print('PASS: IRQ dispatcher rejects an unsolicited/invalid frame', flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('trap', 'full'):
+            trap_ready = 'RVM supervisor trap return ready; registers, status and stack restored.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert trap_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: final kernel returns from supervisor software trap (640 MiB)', flush=True)
+            trap_body = (Path(__file__).parent / 'trap.c').read_text()
+            build_wrapper(trap_body)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM supervisor trap registers, IPLs and worker stack verified.' in out, out
+                print(f'PASS: 63 GPRs, SP, flags, all logical IPLs and worker stack ({pages * 64} KiB)', flush=True)
+            for level in (0, 63):
+                fixture = (root / 'sys/arch/rvm/rvm/trap_probe.vma').read_text()
+                fixture = fixture.replace('#0x1f003f', f'#0x{(level << 16) | 0x3f:x}')
+                (work / 'trap_probe.vma').write_text(fixture)
+                subprocess.run([args.vmasm, '-i', str(work / 'trap_probe.vma'), '-o', str(work / 'trap_probe.o'), '--obj'],
+                               check=True, stdout=subprocess.DEVNULL)
+                build_wrapper(trap_body, trap_probe=work / 'trap_probe.o')
+                out = run(work)
+                assert 'RVM supervisor trap registers, IPLs and worker stack verified.' in out, out
+                print(f'PASS: RTE restores hardware SR interrupt priority {level}', flush=True)
+            for assembly, vector in ((' move.q #0,r0\n syscall\n rts\n', 10),
+                                     (' dc.w $ffff\n rts\n', 0)):
+                build_wrapper(r'''
+extern void rvm_test_probe(void);
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi); rvm_test_probe();
+}
+''', assembly)
+                out = run(work)
+                assert trap_ready in out and f'fatal startup exception: vector 0x{vector:016x}' in out, out
+                print(f'PASS: unsupported supervisor service/fault stays fatal (vector {vector})', flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('idle', 'full'):
+            idle_ready = 'RVM MI idle LWP ready; empty queues, sleep and wakeup verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert idle_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: kernel boots through MI idle/sleep/wakeup (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'idle.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM idle stack, sleeping workers and empty-queue exit verified.' in out, out
+                print(f'PASS: idle stack, 64 event wakeups, blocked worker, empty-queue exit and cleanup ({pages * 64} KiB)', flush=True)
+            halt_body = r'''
+#include <sys/lwp.h>
+#include <sys/cpu.h>
+#include <machine/bootsched.h>
+const char halt_marker[] = "RVM idle HALT boundary reached.\n";
+const char returned[] = "ERROR: sleeping owner returned.\n";
+static void no_event(void *arg __unused) { rvm_early_puts(halt_marker); }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    rvm_bootsched_init(); rvm_bootsched_idle_init(no_event, NULL);
+    rvm_bootsched_sleep(); rvm_early_puts(returned);
+}
+'''
+            build_wrapper(halt_body)
+            out = run(work)
+            assert idle_ready in out and out.count('RVM idle HALT boundary reached.') == 1, out
+            assert 'ERROR: sleeping owner returned.' not in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: no runnable work reaches idle HALT once and leaves owner asleep', flush=True)
+            for operation in (
+                'rvm_bootsched_sleep();',
+                'rvm_bootsched_init(); rvm_bootsched_sleep();',
+                'rvm_bootsched_init(); rvm_bootsched_idle_init(NULL, NULL); cpu_idle();',
+            ):
+                body = r'''
+#include <sys/lwp.h>
+#include <sys/cpu.h>
+#include <machine/bootsched.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert idle_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM directed MI switch' in out, out
+                print('PASS: idle/sleep boundary rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('runq', 'full'):
+            runq_ready = 'RVM MI run queues ready; runnable selection, yield and worker exit verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert runq_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: kernel boots through MI run queues (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'runq.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI priorities, FIFO rotation and queue cleanup verified.' in out, out
+                print(f'PASS: MI priority selection, FIFO rotation, self selection and reaping ({pages * 64} KiB)', flush=True)
+            for operation in (
+                'rvm_bootsched_yield();',
+                'rvm_bootsched_init(); rvm_bootsched_finish();',
+                'rvm_bootsched_init(); splsched(); rvm_bootsched_yield();',
+                'rvm_bootsched_init(); curlwp->l_auxprio = PRI_COUNT; rvm_bootsched_yield();',
+            ):
+                body = r'''
+#include <sys/lwp.h>
+#include <sys/cpu.h>
+#include <machine/bootsched.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert runq_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM directed MI switch' in out, out
+                print('PASS: run queue API rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('switch', 'full'):
+            switch_ready = 'RVM MI switching ready; resumed LWPs, zombie handoff and reaping verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert switch_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: kernel boots through directed MI switching (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'mi_switch.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI switch ring, zombie release and reaping verified.' in out, out
+                print(f'PASS: MI switch ring: 128 switches, heap, zombie handoffs and reaping ({pages * 64} KiB)', flush=True)
+            for operation in (
+                'rvm_bootsched_switch(&target);',
+                'rvm_bootsched_init(); rvm_bootsched_switch(curlwp);',
+                'rvm_bootsched_init(); target.l_pflag |= LP_RUNNING; rvm_bootsched_switch(&target);',
+                'rvm_bootsched_init(); target.l_stat = LSZOMB; rvm_bootsched_switch(&target);',
+            ):
+                body = r'''
+#include <sys/lwp.h>
+#include <sys/proc.h>
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+#include <machine/switch.h>
+#include <machine/bootsched.h>
+static struct lwp target __attribute__((section(".data"))) = { 0 };
+static struct proc process __attribute__((section(".data"))) = { 0 };
+static void entry(void *arg __unused) { rvm_boot_stop(); }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    target.l_addr = (void *)uvm_km_alloc(kernel_map, USPACE, 0, UVM_KMF_WIRED | UVM_KMF_NOWAIT | UVM_KMF_ZERO);
+    target.l_cpu = curcpu(); target.l_flag = LW_SYSTEM;
+    target.l_stat = LSIDL; target.l_pflag = LP_MPSAFE; target.l_proc = &process;
+    cpu_lwp_fork(curlwp, &target, NULL, 0, entry, NULL);
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert switch_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM directed MI switch' in out, out
+                print('PASS: directed MI switching rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('lwp', 'full'):
+            lwp_ready = 'RVM kernel LWPs ready; fork setup and MI startup handoff verified.'
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work)
+            assert lwp_ready in out and 'UVM panic:' not in out and 'fatal startup exception' not in out, out
+            print('PASS: kernel boots through MI LWP startup (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'lwp.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work)
+                assert 'RVM MI LWP startup and u-area lifecycle verified.' in out, out
+                print(f'PASS: LWP fork, live/zombie handoffs, heap and u-area release ({pages * 64} KiB)', flush=True)
+            for operation in (
+                'cpu_lwp_fork(curlwp, &target, (void *)1, 1, entry, NULL);',
+                'target.l_flag = 0; cpu_lwp_fork(curlwp, &target, NULL, 0, entry, NULL);',
+                'cpu_lwp_fork(curlwp, &target, NULL, 0, entry, NULL); target.l_pflag |= LP_RUNNING; cpu_lwp_free2(&target);',
+                'cpu_lwp_fork(curlwp, &target, NULL, 0, entry, NULL); splsched(); curcpu()->ci_onproc = &target; cpu_switchto(curlwp, &target, false);',
+            ):
+                body = r'''
+#include <sys/lwp.h>
+#include <sys/proc.h>
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+#include <machine/switch.h>
+static struct lwp target __attribute__((section(".data"))) = { 0 };
+static struct proc process __attribute__((section(".data"))) = { 0 };
+static void entry(void *arg __unused) { rvm_boot_stop(); }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    target.l_addr = (void *)uvm_km_alloc(kernel_map, USPACE, 0, UVM_KMF_WIRED | UVM_KMF_NOWAIT | UVM_KMF_ZERO);
+    target.l_cpu = curcpu(); target.l_flag = LW_SYSTEM;
+    target.l_stat = LSIDL; target.l_pflag = LP_MPSAFE; target.l_proc = &process;
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert lwp_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM kernel LWP lifecycle' in out, out
+                print('PASS: LWP lifecycle rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
 
         # Focused suite: exercise the actual new MD context-switch path only.
         shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')

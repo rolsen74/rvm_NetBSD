@@ -430,7 +430,7 @@ void uvm_pagewait(struct vm_page *page __unused, krwlock_t *lock __unused,
 
 /* Pool-only bootstrap services; no clock ticks or passive serialization. */
 int cold __attribute__((section(".data"))) = 1;
-volatile time_t time__uptime __attribute__((section(".data"))) = 0;
+/* time__uptime is published by the standalone MI timecounter core. */
 unsigned int
 atomic_inc_uint_nv(volatile unsigned int *value)
 {
@@ -495,6 +495,10 @@ membar_release(void)
 	check_mode();
 	__asm volatile("" ::: "memory");
 }
+
+/* One CPU, caches disabled, and IRQ entry masks CR before reaching C. */
+void membar_producer(void) { membar_release(); }
+void membar_consumer(void) { membar_release(); }
 
 int nullop(void *arg __unused) { return 0; }
 

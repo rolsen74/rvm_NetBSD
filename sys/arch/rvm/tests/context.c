@@ -51,7 +51,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	long resident, wired;
 	unsigned int n;
 	rvm_normal_early_init(bi);
-	REQUIRE(rvm_boot_stage == 20);
+	REQUIRE(rvm_boot_stage == 32);
 	main_lwp = curlwp;
 	before = curcpu()->ci_counts[CPU_COUNT_FREEPAGES];
 	resident = pmap_resident_count(pmap_kernel()); wired = pmap_wired_count(pmap_kernel());

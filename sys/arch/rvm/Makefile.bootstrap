@@ -18,7 +18,7 @@ BOOT_SOURCES := $(wildcard $(RVM_DIR)/stand/boot/*.vma $(RVM_DIR)/stand/boot/inc
 BOOT_OPTIONS := $(addprefix $(OBJDIR)/include/,opt_ddb.h opt_uvm.h opt_uvmhist.h opt_readahead.h opt_multiprocessor.h opt_pax.h opt_sysv.h opt_user_va0_disable_default.h opt_kmempages.h)
 MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache uvm_map rbtree uvm_object uvm_page_status radixtree uvm_km vmem pool uvm_anon uvm_amap
 MI_OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MI_NAMES)))
-BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/cpuswitch.o $(OBJDIR)/cpu_switch.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
+BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/cpuswitch.o $(OBJDIR)/cpu_switch.o $(OBJDIR)/vm_machdep.o $(OBJDIR)/lwp_startup.o $(OBJDIR)/bootsched.o $(OBJDIR)/mi_switch.o $(OBJDIR)/runq.o $(OBJDIR)/idle_loop.o $(OBJDIR)/trap.o $(OBJDIR)/trap_probe.o $(OBJDIR)/irq.o $(OBJDIR)/irq_probe.o $(OBJDIR)/clock_probe.o $(OBJDIR)/bootclock.o $(OBJDIR)/hardclock.o $(OBJDIR)/callout.o $(OBJDIR)/timecounter.o $(OBJDIR)/uarea.o $(OBJDIR)/lwpvm.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
 	$(OBJDIR)/bootmem.o $(OBJDIR)/pmap.o $(OBJDIR)/uvm_machdep.o \
 	$(OBJDIR)/uvm_bootstrap.o $(OBJDIR)/uvm_support.o $(OBJDIR)/bootalloc.o \
 	$(OBJDIR)/bootmap.o $(OBJDIR)/bootobject.o $(OBJDIR)/bootkm.o \
@@ -94,6 +94,83 @@ $(OBJDIR)/bootanonmap.o: $(RVM_DIR)/rvm/bootanonmap.c $(HEADERS) $(RVM_DIR)/Make
 
 $(OBJDIR)/cpu_switch.o: $(RVM_DIR)/rvm/cpu_switch.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/vm_machdep.o: $(RVM_DIR)/rvm/vm_machdep.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/lwp_startup.o: $(SRC_TOP)/sys/kern/kern_lwp.c $(RVM_DIR)/stand/lwp_source.py $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
+	python3 "$(RVM_DIR)/stand/lwp_source.py" "$<" "$(OBJDIR)/lwp_startup.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/lwp_startup.d" -MT "$@" -S "$(OBJDIR)/lwp_startup.c" -o "$(OBJDIR)/lwp_startup.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/lwp_startup.raw.s" "$(OBJDIR)/lwp_startup.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/lwp_startup.s" -o "$@"
+
+$(OBJDIR)/bootsched.o: $(RVM_DIR)/rvm/bootsched.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/mi_switch.o: $(SRC_TOP)/sys/kern/kern_synch.c $(RVM_DIR)/stand/synch_source.py $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
+	python3 "$(RVM_DIR)/stand/synch_source.py" "$<" "$(OBJDIR)/mi_switch.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/mi_switch.d" -MT "$@" -S "$(OBJDIR)/mi_switch.c" -o "$(OBJDIR)/mi_switch.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/mi_switch.raw.s" "$(OBJDIR)/mi_switch.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/mi_switch.s" -o "$@"
+
+$(OBJDIR)/runq.o: $(SRC_TOP)/sys/kern/kern_runq.c $(RVM_DIR)/stand/runq_source.py $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	python3 "$(RVM_DIR)/stand/runq_source.py" "$<" "$(OBJDIR)/runq.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/runq.d" -MT "$@" -S "$(OBJDIR)/runq.c" -o "$(OBJDIR)/runq.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/runq.raw.s" "$(OBJDIR)/runq.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/runq.s" -o "$@"
+
+$(OBJDIR)/idle_loop.o: $(SRC_TOP)/sys/kern/kern_idle.c $(RVM_DIR)/stand/idle_source.py $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	python3 "$(RVM_DIR)/stand/idle_source.py" "$<" "$(OBJDIR)/idle_loop.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/idle_loop.d" -MT "$@" -S "$(OBJDIR)/idle_loop.c" -o "$(OBJDIR)/idle_loop.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/idle_loop.raw.s" "$(OBJDIR)/idle_loop.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/idle_loop.s" -o "$@"
+
+$(OBJDIR)/trap.o: $(RVM_DIR)/rvm/trap.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/trap_probe.o: $(RVM_DIR)/rvm/trap_probe.vma $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(VMASM) -i "$<" -o "$@" --obj
+
+$(OBJDIR)/irq.o: $(RVM_DIR)/rvm/irq.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/irq_probe.o: $(RVM_DIR)/rvm/irq_probe.vma $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(VMASM) -i "$<" -o "$@" --obj
+
+$(OBJDIR)/clock_probe.o: $(RVM_DIR)/rvm/clock_probe.vma $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(VMASM) -i "$<" -o "$@" --obj
+
+$(OBJDIR)/bootclock.o: $(RVM_DIR)/rvm/bootclock.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -MF "$(OBJDIR)/bootclock.d" -MT "$@" -S "$<" -o "$(OBJDIR)/bootclock.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/bootclock.raw.s" "$(OBJDIR)/bootclock.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/bootclock.s" -o "$@"
+
+$(OBJDIR)/hardclock.o: $(SRC_TOP)/sys/kern/kern_clock.c $(RVM_DIR)/stand/hardclock_source.py $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	python3 "$(RVM_DIR)/stand/hardclock_source.py" "$<" "$(OBJDIR)/hardclock.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/hardclock.d" -MT "$@" -S "$(OBJDIR)/hardclock.c" -o "$(OBJDIR)/hardclock.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/hardclock.raw.s" "$(OBJDIR)/hardclock.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/hardclock.s" -o "$@"
+
+$(OBJDIR)/callout.o: $(SRC_TOP)/sys/kern/kern_timeout.c $(RVM_DIR)/stand/callout_source.py $(RVM_DIR)/stand/bootcallout.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	python3 "$(RVM_DIR)/stand/callout_source.py" "$<" "$(OBJDIR)/callout.c" "$(RVM_DIR)/stand/bootcallout.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/callout.d" -MT "$@" -S "$(OBJDIR)/callout.c" -o "$(OBJDIR)/callout.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/callout.raw.s" "$(OBJDIR)/callout.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/callout.s" -o "$@"
+
+$(OBJDIR)/timecounter.o: $(SRC_TOP)/sys/kern/kern_tc.c $(RVM_DIR)/stand/timecounter_source.py $(RVM_DIR)/stand/boottime.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	python3 "$(RVM_DIR)/stand/timecounter_source.py" "$<" "$(OBJDIR)/timecounter.c" "$(RVM_DIR)/stand/boottime.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter -Wno-sign-compare $(HEADER_FLAGS) -MF "$(OBJDIR)/timecounter.d" -MT "$@" -S "$(OBJDIR)/timecounter.c" -o "$(OBJDIR)/timecounter.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/timecounter.raw.s" "$(OBJDIR)/timecounter.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/timecounter.s" -o "$@"
+
+$(OBJDIR)/uarea.o: $(RVM_DIR)/rvm/uarea.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/lwpvm.o: $(SRC_TOP)/sys/uvm/uvm_glue.c $(RVM_DIR)/stand/lwpvm_source.py $(RVM_DIR)/stand/bootlwpvm.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	python3 "$(RVM_DIR)/stand/lwpvm_source.py" "$<" "$(OBJDIR)/lwpvm.c" "$(RVM_DIR)/stand/bootlwpvm.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(OBJDIR)/lwpvm.d" -MT "$@" -S "$(OBJDIR)/lwpvm.c" -o "$(OBJDIR)/lwpvm.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/lwpvm.raw.s" "$(OBJDIR)/lwpvm.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/lwpvm.s" -o "$@"
 
 $(OBJDIR)/cpuswitch.o: $(RVM_DIR)/rvm/cpuswitch.S $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/cpuswitch.vma"
@@ -179,5 +256,26 @@ clean:
 	rm -f "$(OBJDIR)/bootkm.o"
 	rm -f "$(OBJDIR)/bootheap.o"
 	rm -f "$(OBJDIR)/bootpool.o" "$(OBJDIR)/bootcache.o" "$(OBJDIR)/bootanon.o" "$(OBJDIR)/bootamap.o" "$(OBJDIR)/bootanonmap.o" "$(OBJDIR)/cpu_switch.o" "$(OBJDIR)/cpuswitch.o" "$(OBJDIR)/cpuswitch.vma"
+	rm -f "$(OBJDIR)/vm_machdep.o" "$(OBJDIR)/lwp_startup.o" "$(OBJDIR)/lwp_startup.c" "$(OBJDIR)/lwp_startup.raw.s" "$(OBJDIR)/lwp_startup.s"
+
+	rm -f "$(OBJDIR)/bootsched.o" "$(OBJDIR)/mi_switch.o" "$(OBJDIR)/mi_switch.c" "$(OBJDIR)/mi_switch.raw.s" "$(OBJDIR)/mi_switch.s"
+
+	rm -f "$(OBJDIR)/runq.o" "$(OBJDIR)/runq.c" "$(OBJDIR)/runq.raw.s" "$(OBJDIR)/runq.s"
+
+	rm -f "$(OBJDIR)/idle_loop.o" "$(OBJDIR)/idle_loop.c" "$(OBJDIR)/idle_loop.raw.s" "$(OBJDIR)/idle_loop.s"
+
+	rm -f "$(OBJDIR)/trap.o" "$(OBJDIR)/trap_probe.o"
+
+	rm -f "$(OBJDIR)/irq.o" "$(OBJDIR)/irq_probe.o"
+
+	rm -f "$(OBJDIR)/clock_probe.o"
+
+	rm -f "$(OBJDIR)/bootclock.o" "$(OBJDIR)/bootclock.raw.s" "$(OBJDIR)/bootclock.s" "$(OBJDIR)/hardclock.o" "$(OBJDIR)/hardclock.c" "$(OBJDIR)/hardclock.raw.s" "$(OBJDIR)/hardclock.s" "$(OBJDIR)/callout.o" "$(OBJDIR)/callout.c" "$(OBJDIR)/callout.raw.s" "$(OBJDIR)/callout.s"
+
+	rm -f "$(OBJDIR)/timecounter.o" "$(OBJDIR)/timecounter.c" "$(OBJDIR)/timecounter.raw.s" "$(OBJDIR)/timecounter.s"
+
+	rm -f "$(OBJDIR)/uarea.o"
+
+	rm -f "$(OBJDIR)/lwpvm.o" "$(OBJDIR)/lwpvm.c" "$(OBJDIR)/lwpvm.raw.s" "$(OBJDIR)/lwpvm.s"
 
 -include $(wildcard $(OBJDIR)/*.d)

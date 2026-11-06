@@ -16,5 +16,7 @@ int rvm_cpu_bootstrap_lwp(void);
 int rvm_cpu_lwp_prepare(struct lwp *, vaddr_t, vsize_t, void (*)(void *), void *);
 int rvm_cpu_lwp_discard(struct lwp *);
 int rvm_cpu_switch_verify(void);
+int rvm_cpu_lwp_verify(void);
+void rvm_kernel_lwp_startup(struct lwp *, struct lwp *);
 #endif
 #endif

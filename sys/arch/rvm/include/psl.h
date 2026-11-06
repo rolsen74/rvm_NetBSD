@@ -24,9 +24,9 @@
 #define PSL_ALLCC			 ( PSL_X | PSL_N | PSL_Z | PSL_V | PSL_C )
 #define PSL_FLAG_MASK		 0x000000ffULL
 
-/* SR interrupt level: bits 16..22 (7 bits; level 0..64). */
+/* SR interrupt level: bits 16..21 (current VMEmu status mask: 6 bits). */
 #define PSL_IPL_SHIFT		 16
-#define PSL_IPL_MASK		 0x007f0000ULL
+#define PSL_IPL_MASK		 0x003f0000ULL
 #define PSL_IPL( sr )		 ( ( ( sr ) & PSL_IPL_MASK ) >> PSL_IPL_SHIFT )
 
 /* A clear supervisor bit indicates execution in user mode. */
@@ -54,7 +54,7 @@
 #define RVM_CREG_UD1		 10
 #define RVM_CREG_UD2		 11
 
-/* RTE restores the saved interrupt level and SR, per VMRun behavior.
+/* RTE restores the saved interrupt level and SR, per VMEmu behavior.
  * TODO: implement NetBSD spl*() and exception-entry integration.
  */
 

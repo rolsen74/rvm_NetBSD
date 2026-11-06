@@ -41,6 +41,55 @@ rvm_boot_exception:
         jsr     rvm_boot_trap
         jmp     rvm_boot_stop
 
+        /* Version-2 supervisor entry: complete GPR image, then hardware frame. */
+        xdef rvm_supervisor_entry
+        xref rvm_supervisor_dispatch
+rvm_supervisor_entry:
+        pushm r0-r62
+        move.q r63,r2
+        jsr rvm_supervisor_dispatch
+        popm r0-r62
+        rte
+
+        /* The saved CR precedes GPRs and the version-0 hardware frame. */
+        xdef rvm_timer_interrupt_entry
+        xref rvm_timer_irq_dispatch
+rvm_timer_interrupt_entry:
+        pushm r0-r62
+        mfctrl cr,r0
+        pushm r0
+        move.q #8,r0
+        mtctrl r0,cr
+        move.q r63,r2
+        jsr rvm_timer_irq_dispatch
+        popm r0
+        /* Only the selected timer IRQ was enabled; the handler masked it.
+         * Thus restoring CR before the GPR image cannot admit another IRQ.
+         */
+        mtctrl r0,cr
+        popm r0-r62
+        rte
+
+        xdef rvm_irq_get_inte
+rvm_irq_get_inte:
+        mfctrl inte,r0
+        rts
+
+        xdef rvm_irq_set_inte
+rvm_irq_set_inte:
+        mtctrl r2,inte
+        rts
+        xdef rvm_irq_set_cr
+rvm_irq_set_cr:
+        mtctrl r2,cr
+        rts
+
+        /* One idle wait. IRQ setup/return will be added before enabling IRQs. */
+        xdef rvm_cpu_halt
+rvm_cpu_halt:
+        halt
+        rts
+
         xdef  rvm_boot_stop
 rvm_boot_stop:
         rclr.q  r0

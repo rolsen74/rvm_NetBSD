@@ -7,6 +7,13 @@
          * gives a bool argument a one-byte stack home without ABI padding;
          * the C body needs only the two LWP pointers (returning is unused).
          */
+        /* bool has an unpadded byte home in the current compiler ABI. */
+        xdef cpu_uarea_alloc
+        xref rvm_cpu_uarea_alloc
+cpu_uarea_alloc:
+        and.q #1,r2
+        jmp rvm_cpu_uarea_alloc
+
         xdef cpu_switchto
         xref rvm_cpu_switchto
 cpu_switchto:

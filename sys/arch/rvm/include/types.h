@@ -16,6 +16,8 @@
 #include <sys/featuretest.h>
 #include <machine/int_types.h>
 
+#define __HAVE_CPU_UAREA_ROUTINES 1
+
 /*
  * RVM currently targets a 64-bit LP64 ABI.
  * Do not silently compile this header for a 32-bit ABI.

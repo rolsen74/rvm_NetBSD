@@ -40,6 +40,8 @@ struct cpu_info
 	volatile unsigned int ci_intr_depth;
 	int					  ci_cpl; /* current interrupt priority */
 	int					  ci_want_resched;
+	int ci_mtx_oldspl;
+	int ci_mtx_count; /* MI scheduler spin-lock handoff count */
 };
 
 #endif /* _KERNEL || _KMEMUSER */
@@ -52,6 +54,8 @@ struct cpu_info
  * must replace that bootstrap-only definition.
  */
 extern struct cpu_info cpu_info_primary;
+void *cpu_uarea_alloc(bool);
+bool cpu_uarea_free(void *);
 
 #define curcpu() ( &cpu_info_primary )
 #define curlwp	 ( curcpu ()->ci_curlwp )
@@ -76,8 +80,8 @@ cpu_intr_p ( void )
 }
 
 /*
- * TODO: provide interrupt priority/spl operations in machine/intr.h.
- * TODO: provide low-level idle, context switch and clock support.
+ * TODO: implement hardware interrupt masking and trap return.
+ * TODO: add timer/clock support and preemption beyond cooperative switching.
  * TODO: revisit CPU_INFO_FOREACH when SMP support is introduced.
  */
 

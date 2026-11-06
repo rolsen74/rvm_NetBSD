@@ -107,3 +107,13 @@ _Static_assert(__builtin_offsetof(struct pcb, pcb_ssp) == RVM_PCB_SSP, "switch S
 _Static_assert(__builtin_offsetof(struct pcb, pcb_pc) == RVM_PCB_PC, "switch PC");
 _Static_assert((RVM_SWITCH_LAST - RVM_SWITCH_FIRST + 1) * 8 == RVM_SWITCH_PC, "switch registers");
 _Static_assert(RVM_SWITCH_PC + 8 == RVM_SWITCH_SIZE, "switch frame");
+
+#include <machine/trap.h>
+_Static_assert(__builtin_offsetof(struct rvm_exceptionframe, header) == RVM_XF_HEADER, "trap header");
+_Static_assert(__builtin_offsetof(struct rvm_exceptionframe, pc) == RVM_XF_PC, "trap PC");
+_Static_assert(__builtin_offsetof(struct rvm_exceptionframe, root) == RVM_XF_ROOT, "trap MMU root");
+_Static_assert(sizeof(struct rvm_exceptionframe) == RVM_XF_SIZE, "trap register and hardware frame");
+
+#include <machine/irq.h>
+_Static_assert(__builtin_offsetof(struct rvm_irqframe, exception) == 8, "IRQ saved CR");
+_Static_assert(sizeof(struct rvm_irqframe) == RVM_XF_SIZE + 8, "IRQ return frame");

@@ -1,4 +1,4 @@
-/* Initial MD process storage. Scheduling and syscall entry remain pending. */
+/* MD kernel-LWP storage. User trap/syscall integration remains pending. */
 #ifndef _RVM_PROC_H_
 #define _RVM_PROC_H_
 
@@ -10,6 +10,7 @@ struct mdlwp {
 	struct pcb *md_pcb;
 	vaddr_t md_kstack_base;
 	vsize_t md_kstack_size;
+	unsigned int md_startup; /* MI first-entry handoff pending */
 };
 
 struct mdproc {
