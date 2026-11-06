@@ -15,6 +15,8 @@ def main():
     parser.add_argument('--cross', required=True)
     parser.add_argument('--vmasm', default='VMAsm')
     parser.add_argument('--vmemu', default='VMEmu')
+    parser.add_argument('--suite', choices=('new', 'context', 'full'), default='new',
+                        help='new/context: current CPU work only; full: all regressions')
     args = parser.parse_args()
     obj = args.objdir.resolve()
     root = Path(__file__).resolve().parents[4]
@@ -26,6 +28,11 @@ def main():
     km_ready = 'UVM kernel allocator ready; wired and VA-only allocation/free verified.'
     heap_ready = 'Bootstrap kmem heap ready; subpage allocation and span release verified.'
     pool_ready = 'Bootstrap MI pools ready; item allocation and page release verified.'
+    cache_ready = 'Bootstrap MI pool caches ready; constructors and magazine reuse verified.'
+    anon_ready = 'UVM anonymous pages ready; references, zeroing and release verified.'
+    amap_ready = 'UVM anonymous maps ready; sparse slots, sharing and release verified.'
+    anonmap_ready = 'UVM anonymous mappings ready; VM entries, shared aliases and detach verified.'
+    context_ready = 'RVM kernel context switching ready; separate LWP stacks and resume verified.'
     preload_ready = 'UVM physical memory registered; bootstrap allocation verified.'
     compiler = [args.cross + 'gcc',
                 '-std=gnu11', '-O2', '-ffreestanding', '-fno-builtin',
@@ -34,11 +41,11 @@ def main():
                 '-Wno-unused-parameter', '-D_KERNEL', '-I' + str(obj / 'include'),
                 '-I' + str(root / 'sys'), '-I' + str(root / 'common/include')]
 
-    def run(directory):
+    def run(directory, timeout=5):
         try:
             result = subprocess.run([args.vmemu, '-c', 'vm.config'], cwd=directory,
                                     env=env, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, timeout=5)
+                                    stderr=subprocess.PIPE, timeout=timeout)
             raise AssertionError('VM exited unexpectedly: ' + str(result.returncode)
                                  + '\n' + (result.stdout + result.stderr).decode(
                                      errors='replace')[:12000])
@@ -58,6 +65,75 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='netbsd-rvm-test-') as tmp:
         work = Path(tmp)
+        def build_wrapper(body, assembly='', preload=False, extra_objects=()):
+            source = '#define RVM_TEST_PRELOAD_ONLY\n' if preload else ''
+            source += '#define rvm_early_init rvm_normal_early_init\n'
+            source += '#include "' + str(root / 'sys/arch/rvm/rvm/machdep.c') + '"\n'
+            source += '#undef rvm_early_init\n' + body
+            (work / 'wrapper.c').write_text(source)
+            subprocess.run(compiler + ['-c', str(work / 'wrapper.c'), '-o', str(work / 'machdep.o')], check=True)
+            objects = [obj / 'locore.o', obj / 'cpuswitch.o', obj / 'cpu_switch.o', work / 'machdep.o', obj / 'earlycons.o',
+                       obj / 'bootmem.o', obj / 'pmap.o', obj / 'uvm_machdep.o',
+                       obj / 'uvm_bootstrap.o', obj / 'uvm_support.o', obj / 'bootalloc.o',
+                       obj / 'bootmap.o', obj / 'bootobject.o', obj / 'bootkm.o',
+                       obj / 'bootheap.o', obj / 'bootpool.o', obj / 'bootcache.o', obj / 'bootanon.o', obj / 'bootamap.o', obj / 'bootanonmap.o']
+            objects += [obj / (name + '.o') for name in
+                        ('uvm_physseg', 'uvm_page', 'uvm_extent', 'uvm_clock',
+                         'uvm_meter', 'uvm_pgflcache', 'uvm_map', 'rbtree',
+                         'uvm_object', 'uvm_page_status', 'radixtree', 'uvm_km', 'vmem', 'pool', 'uvm_anon', 'uvm_amap')]
+            objects += list(extra_objects)
+            if assembly:
+                asm = ' section ".text",code\n xdef rvm_test_probe\nrvm_test_probe:\n' + assembly
+                (work / 'probe.vma').write_text(asm)
+                subprocess.run([args.vmasm, '-i', str(work / 'probe.vma'),
+                                '-o', str(work / 'probe.o'), '--obj'], check=True, stdout=subprocess.DEVNULL)
+                objects.append(work / 'probe.o')
+            subprocess.run([args.cross + 'ld', '-e', '_start', '-o', str(work / 'netbsd.fhr')]
+                           + [str(path) for path in objects], check=True)
+            configure(work, 256)
+
+        # Focused suite: exercise the actual new MD context-switch path only.
+        shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+        configure(work, 10240)
+        out = run(work)
+        assert context_ready in out and 'fatal startup exception' not in out and 'UVM panic:' not in out, out
+        print('PASS: final kernel boots through CPU context switching (640 MiB)', flush=True)
+        probe = root / 'sys/arch/rvm/tests/switch_regs.S'
+        subprocess.run([args.vmasm, '-i', str(probe), '-o', str(work / 'regs.o'), '--obj'],
+                       check=True, stdout=subprocess.DEVNULL)
+        build_wrapper((Path(__file__).parent / 'context.c').read_text(), extra_objects=(work / 'regs.o',))
+        for pages in (256, 1024):
+            configure(work, pages)
+            out = run(work)
+            assert 'RVM LWP contexts, registers and stack ownership verified.' in out, out
+            print(f'PASS: CPU contexts: R10-R62, distinct stacks, prev-LWP, heap and cleanup ({pages * 64} KiB)', flush=True)
+        for operation in (
+            'splsched(); cpu_switchto(curlwp, NULL, false);',
+            'cpu_switchto(curlwp, curlwp, false);',
+            '((struct pcb *)lwp_getpcb(&target))->pcb_gpr[RVM_REG_SP] = 0; splsched(); cpu_switchto(curlwp, &target, false);',
+            '((struct pcb *)lwp_getpcb(&target))->pcb_mmu_table = 0; splsched(); cpu_switchto(curlwp, &target, false);',
+        ):
+            body = '''
+#include <sys/lwp.h>
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+#include <machine/switch.h>
+#include <machine/pcb.h>
+static struct lwp target __attribute__((section(".data"))) = { 0 };
+static void entry(void *arg __unused) { rvm_boot_stop(); }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    vaddr_t stack = uvm_km_alloc(kernel_map, USPACE, 0, UVM_KMF_WIRED | UVM_KMF_NOWAIT | UVM_KMF_ZERO);
+    target.l_cpu = curcpu(); target.l_flag = LW_SYSTEM;
+    rvm_cpu_lwp_prepare(&target, stack, USPACE, entry, NULL);
+''' + operation + '\n}\n'
+            build_wrapper(body)
+            out = run(work)
+            assert context_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM kernel context switch' in out, out
+            print('PASS: CPU context rejects ' + operation, flush=True)
+        if args.suite != 'full':
+            return
+
         # FHR REL records keep addends in the instruction bytes. Losing them
         # sends data references and local jumps to the starts of sections.
         reloc_source = '''.text
@@ -98,7 +174,7 @@ reloc_data:
         for pages in (32, 256, 1024, 10240):
             configure(work, pages)
             out = run(work)
-            assert pool_ready in out and 'fatal startup exception' not in out, out
+            assert context_ready in out and 'fatal startup exception' not in out, out
             reserved = int(re.search(r'Reserved prefix end: 0x([0-9a-f]+)', out)[1], 16)
             rootpa = int(re.search(r'Supervisor MMU root: 0x([0-9a-f]+)', out)[1], 16)
             free = re.search(r'Free physical range for UVM: 0x([0-9a-f]+)\.\.0x([0-9a-f]+)', out)
@@ -124,33 +200,6 @@ reloc_data:
         out = run(work)
         assert 'Cannot build or verify bootstrap page tables.' in out and ready not in out, out
         print('PASS: insufficient RAM stops before MMU activation', flush=True)
-
-        def build_wrapper(body, assembly='', preload=False, extra_objects=()):
-            source = '#define RVM_TEST_PRELOAD_ONLY\n' if preload else ''
-            source += '#define rvm_early_init rvm_normal_early_init\n'
-            source += '#include "' + str(root / 'sys/arch/rvm/rvm/machdep.c') + '"\n'
-            source += '#undef rvm_early_init\n' + body
-            (work / 'wrapper.c').write_text(source)
-            subprocess.run(compiler + ['-c', str(work / 'wrapper.c'), '-o', str(work / 'machdep.o')], check=True)
-            objects = [obj / 'locore.o', work / 'machdep.o', obj / 'earlycons.o',
-                       obj / 'bootmem.o', obj / 'pmap.o', obj / 'uvm_machdep.o',
-                       obj / 'uvm_bootstrap.o', obj / 'uvm_support.o', obj / 'bootalloc.o',
-                       obj / 'bootmap.o', obj / 'bootobject.o', obj / 'bootkm.o',
-                       obj / 'bootheap.o', obj / 'bootpool.o']
-            objects += [obj / (name + '.o') for name in
-                        ('uvm_physseg', 'uvm_page', 'uvm_extent', 'uvm_clock',
-                         'uvm_meter', 'uvm_pgflcache', 'uvm_map', 'rbtree',
-                         'uvm_object', 'uvm_page_status', 'radixtree', 'uvm_km', 'vmem', 'pool')]
-            objects += list(extra_objects)
-            if assembly:
-                asm = ' section ".text",code\n xdef rvm_test_probe\nrvm_test_probe:\n' + assembly
-                (work / 'probe.vma').write_text(asm)
-                subprocess.run([args.vmasm, '-i', str(work / 'probe.vma'),
-                                '-o', str(work / 'probe.o'), '--obj'], check=True, stdout=subprocess.DEVNULL)
-                objects.append(work / 'probe.o')
-            subprocess.run([args.cross + 'ld', '-e', '_start', '-o', str(work / 'netbsd.fhr')]
-                           + [str(path) for path in objects], check=True)
-            configure(work, 256)
 
         # General MUL instructions have a RegMode destination (mode byte
         # plus register), unlike the raw-register fast three-operand forms.
@@ -223,6 +272,62 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
         assert 'General multiply encodings verified.' in out, out
         print('PASS: signed/unsigned general multiply in all widths, immediates '
               'and memory source with detected GAS compatibility', flush=True)
+
+        # A constant inside a widening extension used to ICE in combine.
+        # Compile separately so callers cannot fold away the multiplies.
+        functions = []
+        checks = []
+        for narrow, wide, bits, signed in (
+                ('signed char', 'short', 8, True),
+                ('short', 'int', 16, True),
+                ('int', 'long', 32, True),
+                ('unsigned char', 'unsigned short', 8, False),
+                ('unsigned short', 'unsigned int', 16, False),
+                ('unsigned int', 'unsigned long', 32, False)):
+            limit = 1 << (bits - int(signed))
+            values = (0, 1, limit - 1, -limit, -1) if signed else (0, 1, limit - 1)
+            constants = (-128, -1, 5, 127) if signed else (5, 127, 128, 255)
+            if bits > 8:
+                constants += (356,)
+            for constant in constants:
+                name = 'widen_mul_' + str(len(functions))
+                functions.append(f'{wide} {name}({narrow} a) '
+                                 f'{{ return ({wide})a * ({narrow}){constant}; }}')
+                checks.append(f'extern {wide} {name}({narrow});')
+                for value in values:
+                    expected = value * constant
+                    checks.append(f'if ({name}(({narrow}){value}) != '
+                                  f'({wide})({expected}L)) return 0;')
+            name = 'widen_mul_' + str(len(functions))
+            functions.append(f'{wide} {name}({narrow} a, {narrow} b) '
+                             f'{{ return ({wide})a * ({wide})b; }}')
+            checks.append(f'extern {wide} {name}({narrow}, {narrow});')
+            for a in values:
+                for b in values:
+                    suffix = 'UL' if a * b >= 0 else 'L'
+                    checks.append(f'if ({name}(({narrow}){a}, ({narrow}){b}) != '
+                                  f'({wide})({a * b}{suffix})) return 0;')
+        (work / 'widen.c').write_text('\n'.join(functions))
+        subprocess.run(compiler + ['-S', str(work / 'widen.c'), '-o',
+                                  str(work / 'widen.raw.s')], check=True)
+        subprocess.run(['python3', str(root / 'sys/arch/rvm/stand/fhr_asm.py'),
+                        str(work / 'widen.raw.s'), str(work / 'widen.s'),
+                        '--cc', args.cross + 'gcc'], check=True)
+        subprocess.run([args.cross + 'gcc', '-c', str(work / 'widen.s'),
+                        '-o', str(work / 'widen.o')], check=True)
+        body = '\n'.join((
+            'static int check_widen(void) {', *checks, 'return 1; }',
+            'const char widen_good[] = "Widening multiplication verified.\\n";',
+            'const char widen_bad[] = "Widening multiplication failed.\\n";',
+            'void rvm_early_init(const struct rvm_bootinfo *bi) {',
+            'rvm_early_consinit();',
+            'if (!check_widen()) { rvm_early_puts(widen_bad); rvm_boot_stop(); }',
+            'rvm_early_puts(widen_good); rvm_normal_early_init(bi); }'))
+        build_wrapper(body, extra_objects=(work / 'widen.o',))
+        out = run(work)
+        assert 'Widening multiplication verified.' in out and pool_ready in out, out
+        print('PASS: compiler widening multiply, signed/unsigned 8/16/32-bit '
+              'constants and registers at boundaries', flush=True)
 
         # Exercise unsigned comparison branches and symbol addresses at -O2.
         comparisons = '''
@@ -311,6 +416,208 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
         print('PASS: MI object ownership, sparse lookups, dirty tags, wire counts, '
               'map references, radix/object exhaustion and restored resources', flush=True)
 
+        build_wrapper((Path(__file__).parent / 'bootanonmap.c').read_text())
+        for pages in (256, 1024):
+            configure(work, pages)
+            out = run(work, timeout=12)
+            assert 'MI anonymous VM entries, aliases and rollback verified.' in out, out
+            print(f'PASS: anonymous VM entries, pinned references, shared aliases, '
+                  f'ledger/descriptor/heap/VA/RAM limits, eager rollback and MI detach '
+                  f'({pages * 64} KiB)', flush=True)
+
+        # A pinned entry's resident page cannot be freed directly, even locked.
+        body = '''
+#include <uvm/uvm.h>
+#include <machine/bootanonmap.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    vaddr_t va = rvm_bootanonmap_alloc(1);
+    struct vm_map_entry *entry;
+    vm_map_lock_read(kernel_map);
+    uvm_map_lookup_entry(kernel_map, va, &entry);
+    struct vm_amap *amap = entry->aref.ar_amap;
+    vm_map_unlock_read(kernel_map);
+    rw_enter(amap->am_lock, RW_WRITER);
+    uvm_pagefree(amap->am_anon[0]->an_page);
+}
+'''
+        build_wrapper(body)
+        out = run(work)
+        assert context_ready in out and 'NetBSD/RVM UVM panic: Invalid raw UVM page operation' in out, out
+        print('PASS: direct page free rejects pinned anonymous VM entries', flush=True)
+
+        for name, operation, assembly, vector in (
+            ('released anonymous VM entry', 'rvm_bootanonmap_free(va, 1);',
+             ' move.q (r2),r0\n rts\n', 5),
+            ('removed shared anonymous VM entry',
+             'rvm_bootanonmap_share(va); rvm_bootanonmap_free(va, 1);',
+             ' move.q (r2),r0\n rts\n', 5),
+            ('non-executable anonymous VM entry', '', ' jsr (r2)\n rts\n', 2),
+        ):
+            body = '#include <machine/bootanonmap.h>\nextern void rvm_test_probe(uintptr_t);\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); vaddr_t va = rvm_bootanonmap_alloc(1);\n'
+            body += operation + '\nrvm_test_probe(va); }\n'
+            build_wrapper(body, assembly)
+            out = run(work)
+            expected = f'vector 0x{vector:016x} version 0x0000000000000003'
+            assert context_ready in out and expected in out and 'CPU stopped.' in out, out
+            print('PASS: hardware protection for ' + name, flush=True)
+
+        build_wrapper((Path(__file__).parent / 'bootamap.c').read_text())
+        for pages in (256, 1024):
+            configure(work, pages)
+            out = run(work)
+            assert 'MI anonymous maps, sharing and exhaustion verified.' in out, out
+            print(f'PASS: MI amap sparse slots, ownership transfers, full-map sharing, '
+                  f'cache/heap/VA/RAM limits and rollback ({pages * 64} KiB)', flush=True)
+
+        for operation, error in (
+            ('anon->an_ref = 0; uvm_anfree(anon);',
+             'Invalid bootstrap anonymous page operation'),
+            ('uvm_pagefree(pg);', 'Invalid raw UVM page operation'),
+            ('pg->flags |= PG_BUSY; rvm_bootamap_drop(map);',
+             'Invalid bootstrap anonymous page operation'),
+        ):
+            body = '#include <uvm/uvm.h>\n#include <machine/bootamap.h>\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); struct vm_amap *map = rvm_bootamap_create(PAGE_SIZE);\n'
+            body += 'struct vm_anon *anon __unused = uvm_analloc();\n'
+            body += 'rvm_bootamap_put(map, 0, anon);\n'
+            body += 'struct vm_page *pg __unused = rvm_bootamap_page(map, 0);\n'
+            body += operation + '\n}\n'
+            build_wrapper(body)
+            out = run(work)
+            assert context_ready in out and 'NetBSD/RVM UVM panic: ' + error in out, out
+            print('PASS: anonymous maps reject ' + operation, flush=True)
+
+        for name, operation, assembly, vector in (
+            ('released anonymous map alias', 'rvm_bootamap_drop(map);',
+             ' move.q (r2),r0\n rts\n', 5),
+            ('non-executable anonymous map page', '', ' jsr (r2)\n rts\n', 2),
+        ):
+            body = '#include <uvm/uvm.h>\n#include <machine/bootamap.h>\nextern void rvm_test_probe(uintptr_t);\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); struct vm_amap *map = rvm_bootamap_create(PAGE_SIZE);\n'
+            body += 'rvm_bootamap_put(map, 0, uvm_analloc());\n'
+            body += 'struct vm_page *pg = rvm_bootamap_page(map, 0);\n'
+            body += 'vaddr_t va = VM_KERNEL_VM_BASE;\n'
+            body += 'pmap_kenter_pa(va, VM_PAGE_TO_PHYS(pg), VM_PROT_READ | VM_PROT_WRITE, 0);\n'
+            body += 'pmap_update(pmap_kernel());\n' + operation + '\nrvm_test_probe(va); }\n'
+            build_wrapper(body, assembly)
+            out = run(work)
+            expected = f'vector 0x{vector:016x} version 0x0000000000000003'
+            assert context_ready in out and expected in out and 'CPU stopped.' in out, out
+            print('PASS: hardware protection for ' + name, flush=True)
+
+        build_wrapper((Path(__file__).parent / 'bootanon.c').read_text())
+        for pages in (256, 1024):
+            configure(work, pages)
+            out = run(work)
+            assert 'MI anonymous descriptors, pages and exhaustion verified.' in out, out
+            print(f'PASS: MI anons, references, page accounting, zeroing, aliases, '
+                  f'descriptor/cache/VA/RAM limits and rollback ({pages * 64} KiB)', flush=True)
+
+        for operation, error in (
+            ('uvm_anfree(anon);', 'Invalid bootstrap anonymous page operation'),
+            ('uvm_anfree((struct vm_anon *)1);', 'Invalid bootstrap anonymous page operation'),
+            ('anon->an_ref = 0; uvm_anfree(anon); uvm_anfree(anon);',
+             'Invalid bootstrap anonymous page operation'),
+            ('uvm_pagealloc_strat(NULL, 0, anon, UVM_PGA_ZERO, 0, 0);',
+             'Invalid raw UVM page operation'),
+            ('struct vm_page *pg = rvm_bootanon_alloc(anon); '
+             'pg->loan_count = 1; rvm_bootanon_drop(anon);',
+             'Invalid bootstrap anonymous page operation'),
+            ('struct vm_page *pg = rvm_bootanon_alloc(anon); '
+             'pg->flags |= PG_BUSY; rvm_bootanon_drop(anon);',
+             'Invalid bootstrap anonymous page operation'),
+            ('anon->an_swslot = 1; anon->an_ref = 0; uvm_anfree(anon);',
+             'Invalid bootstrap anonymous page operation'),
+            ('krwlock_t lock; rw_init(&lock); rw_enter(&lock, RW_WRITER); '
+             'anon->an_lock = &lock; '
+             'uvm_pagealloc_strat(NULL, 0, anon, UVM_PGA_ZERO, 0, 0);',
+             'Invalid raw UVM page operation'),
+            ('struct vm_page *pg = rvm_bootanon_alloc(anon); uvm_pagefree(pg);',
+             'Invalid raw UVM page operation'),
+            ('kpreempt_enable();', 'Invalid bootstrap lock/IPL operation'),
+        ):
+            body = '#include <uvm/uvm.h>\n#include <machine/bootanon.h>\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); struct vm_anon *anon __unused = uvm_analloc();\n'
+            body += operation + '\n}\n'
+            build_wrapper(body)
+            out = run(work)
+            assert context_ready in out and 'NetBSD/RVM UVM panic: ' + error in out, out
+            print('PASS: anonymous pages reject ' + operation, flush=True)
+
+        for name, operation, assembly, vector in (
+            ('released anonymous page alias', 'rvm_bootanon_drop(anon);',
+             ' move.q (r2),r0\n rts\n', 5),
+            ('non-executable anonymous page', '', ' jsr (r2)\n rts\n', 2),
+        ):
+            body = '#include <uvm/uvm.h>\n#include <machine/bootanon.h>\nextern void rvm_test_probe(uintptr_t);\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); struct vm_anon *anon = uvm_analloc();\n'
+            body += 'struct vm_page *pg = rvm_bootanon_alloc(anon);\n'
+            body += 'vaddr_t va = VM_KERNEL_VM_BASE;\n'
+            body += 'pmap_kenter_pa(va, VM_PAGE_TO_PHYS(pg), VM_PROT_READ | VM_PROT_WRITE, 0);\n'
+            body += 'pmap_update(pmap_kernel());\n' + operation + '\nrvm_test_probe(va); }\n'
+            build_wrapper(body, assembly)
+            out = run(work)
+            expected = f'vector 0x{vector:016x} version 0x0000000000000003'
+            assert context_ready in out and expected in out and 'CPU stopped.' in out, out
+            print('PASS: hardware protection for ' + name, flush=True)
+
+        build_wrapper((Path(__file__).parent / 'bootcache.c').read_text())
+        for pages in (256, 1024):
+            configure(work, pages)
+            out = run(work)
+            assert 'MI pool cache magazines, callbacks and exhaustion verified.' in out, out
+            print(f'PASS: MI pool cache normal/large magazines, callbacks, reuse, '
+                  f'ownership/VA/RAM limits and rollback ({pages * 64} KiB)', flush=True)
+
+        for operation in (
+            'pool_cache_put(cache, item + 1);',
+            'pool_cache_put(cache, item); pool_cache_put(cache, item);',
+            'pool_cache_put(other, item);',
+            'pool_cache_put(cache, NULL);',
+            'pool_cache_get(cache, PR_WAITOK);',
+            'pool_cache_get(cache, PR_NOWAIT | PR_ZERO);',
+            'pool_cache_put_paddr(cache, item, 0);',
+            'pool_cache_invalidate((pool_cache_t)1);',
+        ):
+            body = '#include <machine/bootcache.h>\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); pool_cache_t cache = '
+            body += 'rvm_bootcache_create(37, 16, 0, NULL, NULL, NULL);\n'
+            body += 'pool_cache_t other __unused = '
+            body += 'rvm_bootcache_create(37, 16, 0, NULL, NULL, NULL);\n'
+            body += 'unsigned char *item __unused = pool_cache_get(cache, PR_NOWAIT);\n'
+            body += operation + '\n}\n'
+            build_wrapper(body)
+            out = run(work)
+            assert context_ready in out and ('NetBSD/RVM UVM panic: Invalid bootstrap '
+                                          'pool cache operation') in out, out
+            print('PASS: pool cache rejects ' + operation, flush=True)
+
+        for name, operation, assembly, vector in (
+            ('destroyed pool cache page',
+             'pool_cache_put(cache, (void *)va); rvm_bootcache_destroy(cache);',
+             ' move.q (r2),r0\n rts\n', 5),
+            ('non-executable pool cache item', '', ' jsr (r2)\n rts\n', 2),
+        ):
+            body = '#include <machine/bootcache.h>\nextern void rvm_test_probe(uintptr_t);\n'
+            body += 'void rvm_early_init(const struct rvm_bootinfo *bi) {\n'
+            body += 'rvm_normal_early_init(bi); pool_cache_t cache = '
+            body += 'rvm_bootcache_create(37, 16, 0, NULL, NULL, NULL);\n'
+            body += 'vaddr_t va = (vaddr_t)pool_cache_get(cache, PR_NOWAIT);\n'
+            body += operation + '\nrvm_test_probe(va); }\n'
+            build_wrapper(body, assembly)
+            out = run(work)
+            expected = f'vector 0x{vector:016x} version 0x0000000000000003'
+            assert context_ready in out and expected in out and 'CPU stopped.' in out, out
+            print('PASS: hardware protection for ' + name, flush=True)
+
         build_wrapper((Path(__file__).parent / 'bootpool.c').read_text())
         for pages in (256, 1024):
             configure(work, pages)
@@ -335,7 +642,7 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
             body += operation + '\n}\n'
             build_wrapper(body)
             out = run(work)
-            assert pool_ready in out and ('NetBSD/RVM UVM panic: Invalid bootstrap '
+            assert context_ready in out and ('NetBSD/RVM UVM panic: Invalid bootstrap '
                                          'pool operation') in out, out
             print('PASS: pool rejects ' + operation, flush=True)
 
@@ -353,7 +660,7 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
             build_wrapper(body, assembly)
             out = run(work)
             expected = f'vector 0x{vector:016x} version 0x0000000000000003'
-            assert pool_ready in out and expected in out and 'CPU stopped.' in out, out
+            assert context_ready in out and expected in out and 'CPU stopped.' in out, out
             print('PASS: hardware protection for ' + name, flush=True)
 
         build_wrapper((Path(__file__).parent / 'bootheap.c').read_text())

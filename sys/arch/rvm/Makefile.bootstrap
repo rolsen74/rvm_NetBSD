@@ -8,6 +8,7 @@ RVM_CC := $(CROSS_COMPILE)gcc
 RVM_LD := $(CROSS_COMPILE)ld
 VMASM ?= VMAsm
 VMEMU ?= VMEmu
+TEST_SUITE ?= new
 BOOT_CFLAGS := -std=gnu11 -O2 -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-pic -fno-pie -fno-merge-constants \
 	-nostdinc -Wall -Wextra -Werror -MMD -MP
@@ -15,13 +16,13 @@ HEADER_FLAGS := -D_KERNEL -I$(OBJDIR)/include -I$(SRC_TOP)/sys -I$(SRC_TOP)/comm
 HEADERS := $(wildcard $(RVM_DIR)/include/*.h)
 BOOT_SOURCES := $(wildcard $(RVM_DIR)/stand/boot/*.vma $(RVM_DIR)/stand/boot/includes_i/*.i)
 BOOT_OPTIONS := $(addprefix $(OBJDIR)/include/,opt_ddb.h opt_uvm.h opt_uvmhist.h opt_readahead.h opt_multiprocessor.h opt_pax.h opt_sysv.h opt_user_va0_disable_default.h opt_kmempages.h)
-MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache uvm_map rbtree uvm_object uvm_page_status radixtree uvm_km vmem pool
+MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache uvm_map rbtree uvm_object uvm_page_status radixtree uvm_km vmem pool uvm_anon uvm_amap
 MI_OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MI_NAMES)))
-BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
+BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/cpuswitch.o $(OBJDIR)/cpu_switch.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
 	$(OBJDIR)/bootmem.o $(OBJDIR)/pmap.o $(OBJDIR)/uvm_machdep.o \
 	$(OBJDIR)/uvm_bootstrap.o $(OBJDIR)/uvm_support.o $(OBJDIR)/bootalloc.o \
 	$(OBJDIR)/bootmap.o $(OBJDIR)/bootobject.o $(OBJDIR)/bootkm.o \
-	$(OBJDIR)/bootheap.o $(OBJDIR)/bootpool.o $(MI_OBJS)
+	$(OBJDIR)/bootheap.o $(OBJDIR)/bootpool.o $(OBJDIR)/bootcache.o $(OBJDIR)/bootanon.o $(OBJDIR)/bootamap.o $(OBJDIR)/bootanonmap.o $(MI_OBJS)
 
 .PHONY: all check clean run test
 .DELETE_ON_ERROR:
@@ -77,7 +78,26 @@ $(OBJDIR)/bootheap.o: $(RVM_DIR)/rvm/bootheap.c $(HEADERS) $(RVM_DIR)/Makefile.b
 	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
 
 $(OBJDIR)/bootpool.o: $(RVM_DIR)/rvm/bootpool.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
-	$(RVM_CC) $(BOOT_CFLAGS) -O1 -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootcache.o: $(RVM_DIR)/rvm/bootcache.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootanon.o: $(RVM_DIR)/rvm/bootanon.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootamap.o: $(RVM_DIR)/rvm/bootamap.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootanonmap.o: $(RVM_DIR)/rvm/bootanonmap.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/cpu_switch.o: $(RVM_DIR)/rvm/cpu_switch.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/cpuswitch.o: $(RVM_DIR)/rvm/cpuswitch.S $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/cpuswitch.vma"
+	$(VMASM) -i "$(OBJDIR)/cpuswitch.vma" -o "$@" --obj
 
 $(BOOT_OPTIONS): | $(OBJDIR)/include/machine
 	printf '%s\n' '/* Standalone UP bootstrap: option disabled. */' > "$@"
@@ -88,7 +108,7 @@ $(BOOT_OPTIONS): | $(OBJDIR)/include/machine
 MI_CFLAGS := -DNO_KERNEL_RCSIDS -Wno-unused-parameter -Wno-sign-compare -Wno-pointer-sign
 define MI_OBJECT
 $(OBJDIR)/$(1).o: $(SRC_TOP)/$(2) $(RVM_DIR)/stand/fhr_asm.py $(RVM_DIR)/stand/uvm_profile.h $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
-	$(RVM_CC) $(BOOT_CFLAGS) $(4) $(MI_CFLAGS) $(HEADER_FLAGS) $(if $(3),-fwhole-program -DRVM_BOOT_$(3) -include "$(RVM_DIR)/stand/uvm_profile.h") -MF "$(OBJDIR)/$(1).d" -MT "$$@" -S "$$<" -o "$(OBJDIR)/$(1).raw.s"
+	$(RVM_CC) $(BOOT_CFLAGS) $(MI_CFLAGS) $(HEADER_FLAGS) $(if $(3),-fwhole-program -DRVM_BOOT_$(3) -include "$(RVM_DIR)/stand/uvm_profile.h") -MF "$(OBJDIR)/$(1).d" -MT "$$@" -S "$$<" -o "$(OBJDIR)/$(1).raw.s"
 	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/$(1).raw.s" "$(OBJDIR)/$(1).s" --cc "$(RVM_CC)"
 	$(RVM_CC) -c "$(OBJDIR)/$(1).s" -o "$$@"
 endef
@@ -105,9 +125,12 @@ $(eval $(call MI_OBJECT,radixtree,common/lib/libc/gen/radixtree.c,RADIX))
 $(eval $(call MI_OBJECT,uvm_km,sys/uvm/uvm_km.c,KM))
 $(eval $(call MI_OBJECT,vmem,sys/arch/rvm/stand/vmem.c,VMEM))
 $(OBJDIR)/vmem.o: $(SRC_TOP)/sys/kern/subr_vmem.c
-# GCC combine currently ICEs on the two pool units at -O2; use -O1 there.
-$(eval $(call MI_OBJECT,pool,sys/arch/rvm/stand/pool.c,POOL,-O1))
+$(eval $(call MI_OBJECT,pool,sys/arch/rvm/stand/pool.c,POOL))
 $(OBJDIR)/pool.o: $(SRC_TOP)/sys/kern/subr_pool.c
+$(eval $(call MI_OBJECT,uvm_anon,sys/arch/rvm/stand/anon.c,ANON))
+$(OBJDIR)/uvm_anon.o: $(SRC_TOP)/sys/uvm/uvm_anon.c
+$(eval $(call MI_OBJECT,uvm_amap,sys/arch/rvm/stand/amap.c,AMAP))
+$(OBJDIR)/uvm_amap.o: $(SRC_TOP)/sys/uvm/uvm_amap.c
 
 # Runtime callback initialization works around FHR static function pointers.
 $(OBJDIR)/uvm_map.o: $(SRC_TOP)/sys/uvm/uvm_map.c $(RVM_DIR)/stand/map_source.py $(RVM_DIR)/stand/uvm_profile.h $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
@@ -138,7 +161,7 @@ run: all
 test: all
 	python3 "$(RVM_DIR)/tests/bootstrap.py" --objdir "$(OBJDIR)" \
 	    --cross "$(CROSS_COMPILE)" \
-	    --vmasm "$(VMASM)" --vmemu "$(VMEMU)"
+	    --vmasm "$(VMASM)" --vmemu "$(VMEMU)" --suite "$(TEST_SUITE)"
 
 clean:
 	rm -f "$(OBJDIR)/abi-check.o" "$(OBJDIR)/locore.o" \
@@ -155,6 +178,6 @@ clean:
 	rm -f "$(OBJDIR)/bootobject.o"
 	rm -f "$(OBJDIR)/bootkm.o"
 	rm -f "$(OBJDIR)/bootheap.o"
-	rm -f "$(OBJDIR)/bootpool.o"
+	rm -f "$(OBJDIR)/bootpool.o" "$(OBJDIR)/bootcache.o" "$(OBJDIR)/bootanon.o" "$(OBJDIR)/bootamap.o" "$(OBJDIR)/bootanonmap.o" "$(OBJDIR)/cpu_switch.o" "$(OBJDIR)/cpuswitch.o" "$(OBJDIR)/cpuswitch.vma"
 
 -include $(wildcard $(OBJDIR)/*.d)

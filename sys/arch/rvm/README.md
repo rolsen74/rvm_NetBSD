@@ -14,6 +14,17 @@ An MI-vmem-backed bootstrap heap now provides non-sleeping `kmem_alloc()`,
 `kmem_zalloc()` and `kmem_free()` with eight-byte alignment.
 Constrained MI pools now allocate fixed-size items from wired pages, with
 checked ownership and explicit destruction to release idle backing pages.
+MI pool caches now retain constructed objects in real per-CPU magazines,
+with checked client ownership, explicit invalidation and teardown.
+Resident anonymous descriptors now use MI `uvm_analloc()`/`uvm_anfree()`,
+real page ownership and dirty accounting, and checked reference operations.
+Bounded MI anonymous maps now group those descriptors in sparse slots and
+support references to a whole map, with a shared owner lock.
+Eager anonymous mappings now attach those maps to real kernel VM entries;
+shared writable views retain their pages until the last entry is detached.
+The MD `cpu_switchto()` path now switches between kernel LWP stacks and
+preserves the compiler's callee-saved registers. This is a prerequisite for
+scheduler integration; the tests drive cooperative switches explicitly.
 It does not yet enter kernel `main()`, initialize full UVM km and object pagers,
 or run user processes.
 `build.sh -m rvm` is not integrated yet.
@@ -23,7 +34,7 @@ or run user processes.
 Install your updated RVM GCC toolchain before building. This repository
 uses the installed cross compiler directly. The build runs a small codegen
 probe and rejects compilers that can destroy flags between a comparison and
-its branch.
+its branch or crash on widening multiplication at `-O2`.
 
 GCC needs the symbolic pointer-store fix in the maintained sibling source
 `rvm_gcc/_data/work_gcc-14.3.0/gcc/config/rvm/rvm-inst.md`. The DI move
@@ -35,7 +46,13 @@ The backend also needs the atomic compare/branch fix in
 comparison widths now emit the compare and conditional branch as one RTL
 instruction. Without it, GCC can generate `CMP; ADD; BNE`, where the branch
 uses the add's flags and loops past an array. Disabling instruction scheduling
-does not prevent that transformation. Rebuild GCC, then clean-build the port:
+does not prevent that transformation.
+
+The widening-multiply fix in `rvm-inst.md` and `rvm-inst-v.md` is also
+required. Extension inputs must be registers or memory; constants belong
+in the widened result mode. Previously `(unsigned long)n * 356` created
+invalid RTL and crashed in `combine.cc:do_SUBST`. Both signed and unsigned
+8/16/32-bit forms are corrected. Rebuild GCC, then clean-build the port:
 
 ```sh
 cd ../rvm_gcc
@@ -129,6 +146,11 @@ UVM resident objects ready; page ownership and wired allocation verified.
 UVM kernel allocator ready; wired and VA-only allocation/free verified.
 Bootstrap kmem heap ready; subpage allocation and span release verified.
 Bootstrap MI pools ready; item allocation and page release verified.
+Bootstrap MI pool caches ready; constructors and magazine reuse verified.
+UVM anonymous pages ready; references, zeroing and release verified.
+UVM anonymous maps ready; sparse slots, sharing and release verified.
+UVM anonymous mappings ready; VM entries, shared aliases and detach verified.
+RVM kernel context switching ready; separate LWP stacks and resume verified.
 ```
 
 Addresses and condition-code bits can vary. After printing, the CPU halts
@@ -143,8 +165,13 @@ registration and allocation verification, 9 after managed-page allocation
 and freeing, 10 after wired buffer allocation and freeing, 11 after
 verification using the MI kernel VA map, and 12 after object-owned page
 allocation and freeing, and 13 after MI wired/VA-only kernel allocation
-verification, 14 after bootstrap heap verification, and 15 after MI pool
-allocation/destruction verification. A fatal exception sets it to
+verification, 14 after bootstrap heap verification, 15 after MI pool
+allocation/destruction verification, 16 after MI pool-cache constructor,
+magazine reuse and destruction verification, 17 after anonymous-page
+reference, zeroing and final-release verification, 18 after sparse
+anonymous-map slots, shared references and final wipeout verification, and
+19 after anonymous VM-entry attachment, shared aliases and MI detach, and
+20 after kernel LWP stack switching and resumption. A fatal exception sets it to
 `0xff`, reports the hardware vector,
 frame version, saved PC and low SR flags, then halts. All 63 non-SP integer
 registers are saved before entering the fatal C handler. These handlers do
@@ -251,17 +278,18 @@ allocates the `vm_page` array and freelist buckets from the preload registry,
 initializes metadata using `uvm_physseg_init_seg()`, and places managed pages
 on MI free queues. Stolen pages, including metadata, are excluded from managed
 lookups. `uvm_pagealloc_strat()` and `uvm_pagefree()` operate on those queues.
-Their standalone wrappers accept raw pages or registered resident objects,
+Their standalone wrappers accept raw pages, registered resident objects or
+registered anonymous descriptors,
 with normal strategy and `UVM_PGA_ZERO`/`UVM_PGA_USERESERVE` flags.
-Unknown objects, anonymous requests, duplicate/out-of-bounds object offsets,
+Unknown objects or anons, duplicate/out-of-bounds object offsets,
 missing owner locks, invalid frees and double frees halt before entering the
 MI allocation/free bodies.
 Raw requests also accept `UVM_FLAG_COLORMATCH` with a page-aligned offset
 within the bootstrap arena, as required by MI wired kernel allocation.
 Startup allocates a zeroed raw page, maps/writes it, removes the mapping and
 frees it, checking the physical address and restored per-CPU free-page count.
-With the current image and 64 MiB, 1,005 pages are managed after
-bootstrap reservations. The regression suite boots with 2, 16, 64 and 640 MiB.
+Managed-page counts follow the loaded image and its metadata reservations.
+The regression suite boots with 2, 16, 64 and 640 MiB.
 At 1 MiB, the current image cannot complete page-table construction; startup
 stops before MMU activation. The exact low-memory stopping point depends on
 image size and the pages needed for metadata and reserves.
@@ -281,24 +309,36 @@ and invalid unlocks stop. Condition-variable waits, unsupported pool/cache paths
 scheduling and unsupported pager services stop if reached. Requests to wake a pagedaemon
 are recorded; allocation still returns NULL at reserve limits. This support
 file is excluded from normal kernel configuration, where the real kernel
-services must replace it.
+services must replace it. Checked nesting on the bootstrap LWP now supports
+non-preemptible dirty-page counter updates; it does not enable scheduling.
 
 This initializes managed pages, resident objects and wired kernel allocation,
-not `uvm_init()`. Full cached arena/heap startup, anonymous/file-backed objects,
+not `uvm_init()`. Full cached arena/heap startup, demand faults and object pagers,
+file-backed objects,
 paging daemons, user mappings and PV tracking
 remain pending. Interrupts and caches stay disabled. The MD context/process
-headers provide types; signal delivery and context switching remain pending.
+headers now support kernel-only stack switching; MI scheduler startup,
+signal delivery and user context switching remain pending.
 
 VMEmu's uncached MMU access loop must advance to the next **page base** when
 an access crosses a page boundary. Advancing by the fragment length instead
 corrupts cross-page reads/writes, including saved register frames on a stack.
 The source correction is in `rvm_VMEmu/src_Emulator/Memory/Mem.c`.
 
-Run the emulator regression checks with:
+`make test` now defaults to `TEST_SUITE=new`, which selects only the current
+CPU context-switch checks. `TEST_SUITE=context` selects the same scope. Each
+probe still performs normal bootstrap initialization before testing the new
+path; the older emulator cases are not rerun by default.
+
+```sh
+make -f sys/arch/rvm/Makefile.bootstrap test
+```
+
+Run the full emulator regression set explicitly with:
 
 ```sh
 make -f sys/arch/rvm/Makefile.bootstrap \
-    CROSS_COMPILE="$PWD/../rvm_gcc/rvm_cross_netbsd/bin/rvm-netbsd-" test
+    CROSS_COMPILE="$PWD/../rvm_gcc/rvm_cross_netbsd/bin/rvm-netbsd-" TEST_SUITE=full test
 ```
 
 These check FHR relocation offsets, RAM-size-dependent reservations,
@@ -342,7 +382,8 @@ This requires one CPU with interrupts/caches disabled and no scheduler.
 The fixed map-entry store avoids depending on a heap or sleep support. Full kernel
 builds exclude the harness and must use normal UVM startup and kernel allocators.
 Startup verifies a two-page buffer, then aligned MI wired and VA-only
-allocations, the bootstrap heap and MI pools, reaching stage 15 and printing:
+allocations, the bootstrap heap, MI pools, pool caches and anonymous pages,
+reaching stage 20 and printing:
 
 ```text
 Early wired allocator ready; zeroed allocation/free verified.
@@ -351,6 +392,11 @@ UVM resident objects ready; page ownership and wired allocation verified.
 UVM kernel allocator ready; wired and VA-only allocation/free verified.
 Bootstrap kmem heap ready; subpage allocation and span release verified.
 Bootstrap MI pools ready; item allocation and page release verified.
+Bootstrap MI pool caches ready; constructors and magazine reuse verified.
+UVM anonymous pages ready; references, zeroing and release verified.
+UVM anonymous maps ready; sparse slots, sharing and release verified.
+UVM anonymous mappings ready; VM entries, shared aliases and detach verified.
+RVM kernel context switching ready; separate LWP stacks and resume verified.
 ```
 
 The emulator tests additionally cover multi-page zeroing, exact ownership,
@@ -564,12 +610,13 @@ Its initialization wrapper forces `pool_init()` inline so known custom
 allocator and on-page-header choices eliminate unavailable default allocator
 tables. The global pool-list pointer initializer is replaced by runtime
 initialization because of the FHR static-pointer limitation. Full kernel
-`pool_subsystem_init()` and pool-cache machinery are still pending.
+`pool_subsystem_init()` and the default allocator tables are still pending.
+The following bootstrap cache interface uses explicit custom backing.
 
-Two pool source files currently use `-O1`: RVM GCC's combine pass aborts
-internally on their `-O2` form. Other units remain at `-O2`. Pool structs use
-a cache-aligned, power-of-two storage stride, avoiding general immediate
-multiplication when indexing that bootstrap storage.
+All bootstrap units, including both pool sources, use `-O2` with the
+corrected GCC widening-multiply patterns. Pool structs retain cache-aligned,
+power-of-two storage. Regression tests exercise widening constants and
+register products at signed and unsigned 8/16/32-bit boundaries.
 
 The GNU assembler also currently emits a raw destination register byte for
 general `MULS`/`MULU` instructions, while VMEmu expects a register-mode byte
@@ -585,13 +632,258 @@ transitions, zero-on-reuse, live-destroy rejection, item-record/backing-map
 exhaustion, allocator reference-count reuse, invalid returns, restored counts,
 and NX and access-after-destruction hardware faults.
 
-Next, integrate full pool-cache startup and anonymous objects, managed mapping/PV
-tracking and the remaining pmap API. Add kernel
+## Bootstrap MI pool caches
+
+`rvm_bootcache_create(size, alignment, flags, ctor, dtor, arg)` initializes
+caller-owned cache storage through real MI `pool_cache_bootstrap()`. There
+are four cache slots, 512 shared outstanding-client records and the same
+item-size/alignment limits as bootstrap pools. Flags are zero or
+`PR_LARGECACHE`. NULL callbacks select no-op constructor/destructor functions.
+Constructors receive `PR_NOWAIT`; failure returns the object to its pool and
+returns NULL without invoking the destructor. Callbacks may use independent
+non-sleeping allocators, but may not reenter the bootstrap cache API.
+
+`pool_cache_get()` and `pool_cache_put()` validate client ownership and call
+the unchanged MI magazine paths. Real current/previous CPU magazines and
+global full/empty group lists retain constructed objects. A cache hit preserves
+object contents and does not rerun the constructor. Requests must be exactly
+`PR_NOWAIT`: `PR_ZERO` is rejected because clearing constructed state is not
+part of this cache contract. Physical-address results are
+`POOL_PADDR_INVALID`, which is also the only accepted return-address value.
+
+The first cache initializes two real MI group pools, each with one wired
+metadata page allocated using NOWAIT at IPL_NONE. A magazine allocation
+at logical IPL_VM cannot grow those pools; it falls back to MI's immediate
+destructor/return path if no group is available. Pages for cache items use
+the wired MI kernel allocator. These two metadata mappings share the existing
+32-entry, 16 MiB backing arena with other allocators.
+
+`pool_cache_invalidate()` flushes cached objects and calls their destructors;
+objects still held by clients remain valid. `rvm_bootcache_destroy()` refuses
+live client items, then invokes MI cache invalidation and pool teardown.
+Destroying the last cache also releases both metadata pools. Free-page,
+pmap and map-entry counts return to their pre-cache values. Returning an
+item or invalidating a cache can retain pool backing until destruction.
+
+This is still a single-CPU bootstrap with hardware interrupts and caches
+disabled. A checked pointer compare-and-swap and release compiler barrier
+support MI magazine lists under that restriction; they are not general SMP
+atomics. Cross-CPU calls and passive serialization remain fail-stop. The
+`mp_online` flag has padded assembly storage because the current FHR compiler
+does not emit scalar data padding. The 11-argument MI cache initializer is
+forced inline to avoid the existing outgoing stacked-argument ABI limitation.
+
+Tests cover normal and large magazines, full/partial transitions, callback
+counts and retained contents, constructor failure, live invalidation,
+cross-cache reuse, descriptor/client limits, metadata and item backing failures,
+physical exhaustion, repeated teardown, invalid returns, NX and access after
+cache destruction. Startup also checks callbacks and page-count restoration.
+
+## Resident anonymous descriptors
+
+`bootanon.c` checks ownership around the unchanged MI `uvm_analloc()` and
+`uvm_anfree()` bodies in `uvm_anon.c`. `stand/anon.c` adapts their private
+cache identity to the bounded, custom-backed MI cache facility and uses the
+real MI constructor. The general MI default-allocator initialization path
+is excluded. Descriptor allocation lazily initializes that cache and returns
+NULL on descriptor, cache, virtual or physical backing exhaustion.
+`uvm_anon_init()` provides explicit initialization and stops if it fails.
+
+There are 128 registered descriptors. Each initially has one reference,
+no page and no associated lock, as in MI UVM. `rvm_bootanon_hold()` and
+`rvm_bootanon_drop()` bind a private checked writer lock and adjust references.
+The last drop invokes real MI final release. `rvm_bootanon_alloc()` supplies
+one zero-filled managed page at offset zero, through real `uvm_pagealloc_strat()`.
+Its `uanon`, `an_page`, `PG_ANON` and per-CPU clean/dirty counts are maintained
+by MI code. No pager or waiter exists, so the helper clears `PG_BUSY|PG_FAKE`
+once zeroing is complete. These resident pages are not wired or queued for
+reclaim. Repeated page allocation for the same descriptor is rejected.
+
+The checked `uvm_pagefree()` path also supports a registered anonymous page
+while its registered owner lock is held and no VM entries pin the map.
+It removes its kernel aliases, then
+MI detaches the page from the anon and restores counters/free queues. The
+live descriptor remains usable for another allocation. Direct `uvm_anfree()`
+is supported for an unbound, empty, zero-reference descriptor. Privately bound
+descriptors use `rvm_bootanon_drop()`; descriptors transferred to a registered
+amap are released through that amap. This controls both owner-lock lifetimes.
+Swap slots, loans, queued/wanted or wired pages and delayed `PG_BUSY` final
+release are rejected. Swap, COW faults and anonymous object pagers remain
+pending. The bootstrap amap interface below supports sparse resident slots.
+
+The MI anon compilation uses a private page-protection hook for final release.
+It removes matching aliases across the existing 256 MiB mutable kernel window
+and updates pmap statistics before the physical page is freed. The permanent
+supervisor identity mapping remains, as with raw pages. The hook does not
+implement generic `pmap_page_protect()` or user PV tracking. Virtual map-entry
+reservations, if any, still belong to their callers.
+
+`rvm_bootanon_fini()` refuses live descriptors. With none remaining, it destroys
+the anon cache and releases its retained items/backing; magazine metadata is
+also released when this was the last bootstrap cache. A failed descriptor
+allocation can leave an initialized cache, which `fini()` releases. Startup
+verifies reference retention, zeroing, alias removal, page accounting and full
+resource restoration, then tears its test cache down so other bootstrap
+clients can use all cache slots.
+
+Tests exercise descriptor/cache exhaustion and reuse, private locking,
+reference overflow, clean/dirty transitions with nested preemption guards,
+multiple aliases, allocation failures at each cache backing stage, physical
+exhaustion/recovery, invalid frees and unsupported loans/busy final release.
+Hardware probes verify NX and faulting access through a released alias.
+
+## Bootstrap anonymous maps
+
+`rvm_bootamap_create(size)` calls the actual MI `amap_alloc()` body with
+`UVM_FLAG_NOWAIT`, no extra padding request, and a checked size from one
+through 256 pages. Sixteen maps may be live. MI allocates its used-slot,
+back-pointer and anon-pointer arrays through the bootstrap heap; array
+allocation failures follow MI's rollback paths. Slot rounding uses the heap's
+eight-byte quantum. Cached map descriptors use the existing custom-backed MI
+cache, with the real `amap_ctor()`/`amap_dtor()` maintaining the amap list.
+
+The adapter provides 32 private managed-lock slots for those constructed
+objects. Each lock belongs to exactly one cached amap; descriptors in the
+same map share it. These private helpers replace only the MI amap
+compilation's `rw_obj_*` calls. General dynamically shared rwlocks and
+anonymous page-loan locks are still unavailable. Cache teardown checks that
+all amap list entries and private locks have been released.
+
+`rvm_bootamap_put(map, offset, anon)` transfers one caller-owned descriptor
+reference into an empty slot. The descriptor must have one reference and
+no existing map owner. It may already have a resident page. MI `amap_add()`
+updates its sparse arrays; the registry changes its owner lock to the map's
+lock. `rvm_bootamap_lookup()` returns a borrowed descriptor.
+`rvm_bootamap_take()` calls MI `amap_unadd()`, which compacts the used slots
+and repairs back pointers, then returns ownership and a private lock to the
+caller. Put/take require an unshared map with no attached VM entries. Invalid maps, offsets, duplicate
+placements or conflicting ownership return failure without transferring an
+object. Borrowed descriptors cannot be dropped through the private anon API.
+
+`rvm_bootamap_page()` returns an existing resident page or allocates a zeroed
+one under the shared owner lock using real UVM page allocation. Whole-map
+`rvm_bootamap_hold()`/`drop()` invoke MI `amap_ref()`/`amap_unref()`, including
+its optional per-page reference array. Up to 1,024 references are supported.
+These references share one amap; individual anon reference counts remain
+unchanged. Final drop runs real MI `amap_wipeout()`, releases each descriptor
+and resident page, removes kernel aliases, frees the slot arrays and returns
+the map descriptor to its cache. The IRQ-off bootstrap preemption checkpoint
+checks that no scheduling request is pending instead of switching LWPs.
+
+`rvm_bootamap_fini()` refuses live maps, then destroys cached descriptors and
+their locks/backing. The anonymous-descriptor cache is independent and can
+be closed with `rvm_bootanon_fini()` once no descriptors remain. Metadata can
+remain cached after an allocation failure until these explicit teardown calls.
+Startup verifies sparse lookup, sharing, ownership transfer and wipeout, then
+restores the physical free-page count and heap allocation count.
+
+Use the `rvm_bootamap_*` interface for standalone amap ownership, and the
+anonymous mapping interface below for kernel VM entries. Partial references/
+unmaps, map extension, cross-amap COW, swap and page faults remain pending;
+the general MI entry-point stubs have not been replaced. Tests exercise sparse arrays and back pointers, more than
+32 entries to reach the MI preemption checkpoint, map/slot limits, ownership
+transfer with data retention, shared-reference retention, constructor/heap/VA/
+physical exhaustion, rollback of all three array allocation stages, repeated
+cache teardown, and NX/access-after-wipeout faults.
+
+## Anonymous kernel VM entries
+
+`rvm_bootanonmap_alloc(size)` reserves a real `kernel_map` entry, creates an
+amap, eagerly allocates zeroed anonymous pages and enters RW/NX kernel aliases.
+It then transfers its amap reference into the entry's `aref`, with page offset
+zero and no backing object. It returns a page-aligned VA or zero on failure.
+Sizes are positive and round to 64 KiB pages, up to 128 pages (8 MiB), subject
+to the shared descriptor, heap, physical-memory and 16 MiB VA-arena limits.
+There are 16 mapping records; the existing 32 map-entry slots also serve
+allocator metadata and other bootstrap allocations.
+
+`rvm_bootanonmap_share(base)` creates another complete writable view of the
+same pages, through a separate VM entry and a full amap reference. Writes are
+visible in all views. Each entry pins the reference transferred into it;
+`rvm_bootamap_drop()` may drop only separately held caller references.
+Put/take and direct anonymous-page free are rejected while entries pin the
+amap. A caller can explicitly hold an extra amap reference and retain its
+resident pages after removing the final entry.
+
+`rvm_bootanonmap_free(base, original_size)` requires the exact returned base
+and requested byte size. It removes that entry's aliases before invoking MI
+`uvm_unmap_remove()` with VAONLY, then calls real `uvm_unmap_detach()` after
+unlocking the kernel map. VAONLY avoids the nonpageable map's raw-page freeing
+path: these pages belong to anons. A constrained `amap_unref` hook in only the
+MI MAP compilation validates the active full-entry detach and drops its pinned
+amap reference. The last reference invokes MI wipeout and returns the pages;
+remaining shared entries retain their aliases and data. Heap-span release
+from wipeout may reenter the kernel map after its lock has been dropped.
+
+Failed creation releases partially populated pages and aliases before
+releasing its reservation. Failed sharing removes only the tentative view.
+Pre-existing pmap aliases at a newly reserved range are detected and left
+intact. The ordinary reservation-release API rejects attached amaps.
+Allocation failures can retain initialized cache backing until explicit
+`rvm_bootamap_fini()`/`rvm_bootanon_fini()` calls; those calls refuse live maps
+or descriptors. Startup tears its test caches down and verifies restored
+physical-page and pmap counts.
+
+Tests cover real entry metadata, zeroing, bidirectional shared data, entry
+reference pins, exact-size frees, retained caller references, mapping-record
+limits and reuse, descriptor exhaustion after partial population, rollback at
+all heap-array allocation stages, backing-entry exhaustion, physical exhaustion
+and recovery. Full-range sharing also works when MI's optional ppref allocation
+fails. Hardware checks verify NX, access after final release, and faulting access
+to a removed view while another view remains alive.
+
+These are resident bootstrap mappings. Demand-fault handling, partial unmaps,
+protection changes, COW, swapping and user address spaces remain pending.
+## Kernel LWP switching
+
+`cpu_switch.c` and `cpuswitch.S` implement NetBSD's three-argument
+`cpu_switchto(old, next, returning)` entry for kernel LWPs sharing the kernel
+pmap. The caller must be at logical IPL_SCHED with hardware interrupts and
+caches disabled. The path validates the LWP/PCB relationship, target stack
+bounds, CPU ownership and MMU root, then updates `ci_curlwp`/`ci_onproc` and
+changes stacks. It supports the MI scheduler's convention of selecting
+`ci_onproc` before the MD call. The resumed caller receives the previous LWP,
+matching the MI switch contract. `returning` is unused in this restricted path.
+
+The assembly saves R10-R62 (including FP and the compiler's reserved registers)
+in a 424-byte stack frame above its caller return PC, records the saved SP,
+SSP and continuation in the PCB, then restores the next frame. C offset checks
+in `abi-check.c` enforce the assembly layout. R0-R9 are call-clobbered. User
+register/trap state and alternate address spaces are not switched here.
+
+`rvm_cpu_bootstrap_lwp()` attaches a PCB and stack bounds to the bootstrap LWP.
+`rvm_cpu_lwp_prepare()` builds an initial frame in a mapped 128 KiB kernel
+u-area, with the PCB at its base and the stack above it. The caller owns the
+LWP and u-area allocation. `rvm_cpu_lwp_discard()` detaches an inactive context;
+the caller can then release the u-area. The entry trampoline validates first
+entry and calls a kernel function; a returning function stops explicitly.
+Full `cpu_lwp_fork()`, MI `lwp_startup()` and normal thread exit are still needed.
+
+The public assembly entry passes only the two LWP pointers to its C body.
+This avoids the current compiler allocating an unpadded 17-byte stack home
+for two pointers followed by `bool`; the standard public MI signature is
+unchanged. No compiler rebuild is needed. Checked preemption nesting now
+accepts the active kernel LWP on this CPU, enabling allocator use from a
+switched context, while IRQs remain off.
+
+Startup switches between two separate worker stacks and the controller,
+checks stack-local values and previous-LWP returns, then releases both stacks.
+The focused emulator suite additionally checks every preserved register with
+distinct patterns in each context, 64 resumptions, selected-`ci_onproc`
+ordering, heap allocation/free on a worker, resource restoration, invalid
+priority, NULL targets, invalid saved SPs and wrong MMU roots. Default
+`make test` runs these seven checks, not the older allocator suites.
+
+This supplies the low-level kernel stack switch, not a working MI scheduler.
+Next, implement kernel LWP startup/exit integration, interrupt/exception return
+and a timer, alongside the remaining normal kernel initialization dependencies.
+Object pagers, managed mapping/PV
+tracking and the remaining pmap API also remain necessary. Add kernel
 build glue, missing machine interfaces, interrupt priority operations,
 a timer and `mainbus` support to reach
 `kern/init_main.c:main()`. The policy in `vmparam.h` remains provisional.
 
-Context switching, copyin/copyout, syscalls, signals, user executable loading,
+User context switching, copyin/copyout, syscalls, signals, user executable loading,
 and a root filesystem are later milestones. FHR kernel loading and FHR
 user executable support are separate tasks.
 

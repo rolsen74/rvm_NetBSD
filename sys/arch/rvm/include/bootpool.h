@@ -5,6 +5,7 @@
 struct pool;
 #define RVM_BOOTPOOL_POOLS 8
 #define RVM_BOOTPOOL_ITEMS 512
+int rvm_bootpool_init(void);
 struct pool *rvm_bootpool_create(size_t, unsigned int);
 int rvm_bootpool_destroy(struct pool *);
 int rvm_bootpool_verify(void);

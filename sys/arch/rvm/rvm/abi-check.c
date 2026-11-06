@@ -5,6 +5,7 @@
 #include <machine/vmparam.h>
 #include <machine/reg.h>
 #include <machine/pcb.h>
+#include <machine/switch.h>
 #include <machine/frame.h>
 #include <machine/generic.h>
 #include <machine/boot.h>
@@ -100,3 +101,9 @@ rvm_check_formats(int64_t s, uint64_t u, uintptr_t p, intmax_t m)
 	rvm_check_printf("%" PRId64 " %" PRIx64 " %" PRIxPTR " %" PRIdMAX,
 	    s, u, p, m);
 }
+
+_Static_assert(__builtin_offsetof(struct pcb, pcb_gpr[RVM_REG_SP]) == RVM_PCB_SP, "switch SP");
+_Static_assert(__builtin_offsetof(struct pcb, pcb_ssp) == RVM_PCB_SSP, "switch SSP");
+_Static_assert(__builtin_offsetof(struct pcb, pcb_pc) == RVM_PCB_PC, "switch PC");
+_Static_assert((RVM_SWITCH_LAST - RVM_SWITCH_FIRST + 1) * 8 == RVM_SWITCH_PC, "switch registers");
+_Static_assert(RVM_SWITCH_PC + 8 == RVM_SWITCH_SIZE, "switch frame");

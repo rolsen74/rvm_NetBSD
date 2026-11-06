@@ -106,3 +106,10 @@ rvm_uvm_print_entry:
         xdef kernel_pmap_ptr
 kernel_pmap_ptr:
         dc.q kernel_pmap_store
+
+        /* Keep following FHR data four-byte aligned: GCC omits scalar padding. */
+        section ".data",data
+        SecAlign 4
+        xdef mp_online
+mp_online:
+        dc.l 0

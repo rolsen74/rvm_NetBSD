@@ -12,6 +12,9 @@ int rvm_bootmap_init(void);
 int rvm_bootmap_reserve(vaddr_t *, vsize_t, vsize_t, int);
 struct uvm_object;
 int rvm_bootmap_reserve_object(vaddr_t *, vsize_t, struct uvm_object *);
+struct vm_amap;
+int rvm_bootmap_attach_amap(vaddr_t, vsize_t, struct vm_amap *);
+int rvm_bootmap_release_amap(vaddr_t, vsize_t, struct vm_amap *);
 /* Exact entries only; rejects partial, unknown or double releases. */
 int rvm_bootmap_release(vaddr_t, vsize_t);
 

@@ -23,7 +23,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	volatile uint64_t *words;
 
 	rvm_normal_early_init(bi);
-	CHECK(rvm_boot_stage == 15 && !rvm_bootalloc_init());
+	CHECK(rvm_boot_stage == 20 && !rvm_bootalloc_init());
 	before = curcpu()->ci_counts[CPU_COUNT_FREEPAGES];
 	resident = pmap_resident_count(pmap_kernel());
 	wired = pmap_wired_count(pmap_kernel());

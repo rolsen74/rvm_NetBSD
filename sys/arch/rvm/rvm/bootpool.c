@@ -70,13 +70,11 @@ page_free(struct pool *pool, void *page)
 	uvm_km_free(kernel_map, (vaddr_t)page, PAGE_SIZE, UVM_KMF_WIRED);
 }
 
-struct pool *
-rvm_bootpool_create(size_t size, unsigned int alignment)
+int
+rvm_bootpool_init(void)
 {
-	unsigned int i;
-	if (!available() || size == 0 || size > PAGE_SIZE / 2 ||
-	    (alignment != 0 && (alignment < 8 || alignment > 256 || !powerof2(alignment))))
-		return NULL;
+	if (!available())
+		return 0;
 	if (!initialized) {
 		rvm_mi_pool_globals();
 		allocator.pa_alloc = page_alloc;
@@ -84,6 +82,18 @@ rvm_bootpool_create(size_t size, unsigned int alignment)
 		allocator.pa_pagesz = PAGE_SIZE;
 		initialized = 1;
 	}
+	return 1;
+}
+
+struct pool *
+rvm_bootpool_create(size_t size, unsigned int alignment)
+{
+	unsigned int i;
+	if (!available() || size == 0 || size > PAGE_SIZE / 2 ||
+	    (alignment != 0 && (alignment < 8 || alignment > 256 || !powerof2(alignment))))
+		return NULL;
+	if (!rvm_bootpool_init())
+		return NULL;
 	for (i = 0; i < RVM_BOOTPOOL_POOLS; i++) {
 		if (!active[i]) {
 			rvm_mi_pool_setup(&pools[i].pool, size, alignment == 0 ? 8 : alignment,

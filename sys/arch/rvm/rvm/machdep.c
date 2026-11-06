@@ -9,10 +9,15 @@
 #include <machine/bootalloc.h>
 #include <machine/bootheap.h>
 #include <machine/bootpool.h>
+#include <machine/bootcache.h>
+#include <machine/bootanon.h>
+#include <machine/bootamap.h>
+#include <machine/bootanonmap.h>
+#include <machine/switch.h>
 #include <machine/generic.h>
 
 /* 1: C, 2: console, 3: memory, 4: pmap, 5: MMU, 6/7: verified, 8/9: UVM,
- * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools. */
+ * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts. */
 volatile unsigned long rvm_boot_stage
     __attribute__((section(".data"))) = 0;
 static volatile unsigned int rvm_boot_fault_active
@@ -56,6 +61,21 @@ const char rvm_msg_heap[] =
 const char rvm_msg_badheap[] = "Bootstrap heap verification failed.\n";
 const char rvm_msg_pool[] =
     "Bootstrap MI pools ready; item allocation and page release verified.\n";
+const char rvm_msg_cache[] =
+    "Bootstrap MI pool caches ready; constructors and magazine reuse verified.\n";
+const char rvm_msg_anon[] =
+    "UVM anonymous pages ready; references, zeroing and release verified.\n";
+const char rvm_msg_amap[] =
+    "UVM anonymous maps ready; sparse slots, sharing and release verified.\n";
+const char rvm_msg_anonmap[] =
+    "UVM anonymous mappings ready; VM entries, shared aliases and detach verified.\n";
+const char rvm_msg_switch[] =
+    "RVM kernel context switching ready; separate LWP stacks and resume verified.\n";
+const char rvm_msg_badswitch[] = "RVM kernel context switch verification failed.\n";
+const char rvm_msg_badanonmap[] = "UVM anonymous mapping verification failed.\n";
+const char rvm_msg_badamap[] = "UVM anonymous map verification failed.\n";
+const char rvm_msg_badanon[] = "UVM anonymous page verification failed.\n";
+const char rvm_msg_badcache[] = "Bootstrap pool cache verification failed.\n";
 const char rvm_msg_badpool[] = "Bootstrap pool verification failed.\n";
 const char rvm_msg_badwired[] = "Early wired allocator verification failed.\n";
 const char rvm_msg_ram[] = "RAM end: 0x";
@@ -244,6 +264,36 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	}
 	rvm_boot_stage = 15;
 	rvm_early_puts(rvm_msg_pool);
+	if (!rvm_bootcache_verify()) {
+		rvm_early_puts(rvm_msg_badcache);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 16;
+	rvm_early_puts(rvm_msg_cache);
+	if (!rvm_bootanon_verify()) {
+		rvm_early_puts(rvm_msg_badanon);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 17;
+	rvm_early_puts(rvm_msg_anon);
+	if (!rvm_bootamap_verify()) {
+		rvm_early_puts(rvm_msg_badamap);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 18;
+	rvm_early_puts(rvm_msg_amap);
+	if (!rvm_bootanonmap_verify()) {
+		rvm_early_puts(rvm_msg_badanonmap);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 19;
+	rvm_early_puts(rvm_msg_anonmap);
+	if (!rvm_cpu_switch_verify()) {
+		rvm_early_puts(rvm_msg_badswitch);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 20;
+	rvm_early_puts(rvm_msg_switch);
 }
 
 void

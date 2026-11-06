@@ -9,8 +9,32 @@
 #define uvm_pagealloc_strat rvm_mi_pagealloc_strat
 #define uvm_pagefree rvm_mi_pagefree
 #endif
+#if defined(RVM_BOOT_AMAP)
+#define amap_alloc rvm_mi_amap_alloc
+#define amap_add rvm_mi_amap_add
+#define amap_unadd rvm_mi_amap_unadd
+#define amap_lookup rvm_mi_amap_lookup
+#define amap_ref rvm_mi_amap_ref
+#define amap_unref rvm_mi_amap_unref
+#define pool_cache_get_paddr rvm_amap_cache_get
+#define pool_cache_put_paddr rvm_amap_cache_put
+#define rw_obj_tryalloc rvm_amap_lock_alloc
+#define rw_obj_alloc rvm_amap_lock_wait
+#define rw_obj_free rvm_amap_lock_free
+#define rw_obj_refcnt rvm_amap_lock_refs
+#define kmem_roundup_size rvm_amap_roundup
+#define pmap_page_protect rvm_bootanon_page_protect
+#endif
+#if defined(RVM_BOOT_ANON)
+#define uvm_analloc rvm_mi_analloc
+#define uvm_anfree rvm_mi_anfree
+#define pool_cache_get_paddr rvm_anon_cache_get
+#define pool_cache_put_paddr rvm_anon_cache_put
+#define pmap_page_protect rvm_bootanon_page_protect
+#endif
 #if defined(RVM_BOOT_MAP)
 #define uvm_map rvm_mi_map
+#define amap_unref rvm_map_amap_unref
 #endif
 #if defined(RVM_BOOT_VMEM)
 #define vmem_alloc rvm_mi_heap_alloc
@@ -20,6 +44,10 @@
 #define pool_get rvm_mi_pool_get
 #define pool_put rvm_mi_pool_put
 #define pool_destroy rvm_mi_pool_destroy
+#define pool_cache_get_paddr rvm_mi_cache_get_paddr
+#define pool_cache_put_paddr rvm_mi_cache_put_paddr
+#define pool_cache_invalidate rvm_mi_cache_invalidate
+#define pool_cache_bootstrap_destroy rvm_mi_cache_destroy
 #endif
 #if defined(RVM_BOOT_KM)
 #define uvm_km_alloc rvm_mi_km_alloc
@@ -32,16 +60,50 @@
 #include <uvm/uvm.h>
 #define RVM_BOOT_EXPORT __attribute__((externally_visible))
 
+#if defined(RVM_BOOT_AMAP)
+#include <sys/pool.h>
+int rvm_mi_amap_start(void) RVM_BOOT_EXPORT;
+int rvm_mi_amap_stop(void) RVM_BOOT_EXPORT;
+struct vm_amap *amap_alloc(vaddr_t, vaddr_t, int) RVM_BOOT_EXPORT;
+void amap_add(struct vm_aref *, vaddr_t, struct vm_anon *, bool) RVM_BOOT_EXPORT;
+void amap_unadd(struct vm_aref *, vaddr_t) RVM_BOOT_EXPORT;
+struct vm_anon *amap_lookup(struct vm_aref *, vaddr_t) RVM_BOOT_EXPORT;
+void amap_ref(struct vm_amap *, vaddr_t, vsize_t, int) RVM_BOOT_EXPORT;
+void amap_unref(struct vm_amap *, vaddr_t, vsize_t, bool) RVM_BOOT_EXPORT;
+void *rvm_amap_cache_get(pool_cache_t, int, paddr_t *);
+void rvm_amap_cache_put(pool_cache_t, void *, paddr_t);
+#endif
+
+#if defined(RVM_BOOT_ANON)
+#include <sys/pool.h>
+int rvm_mi_anon_start(void) RVM_BOOT_EXPORT;
+int rvm_mi_anon_stop(void) RVM_BOOT_EXPORT;
+struct vm_anon *uvm_analloc(void) RVM_BOOT_EXPORT;
+void uvm_anfree(struct vm_anon *) RVM_BOOT_EXPORT;
+void *rvm_anon_cache_get(pool_cache_t, int, paddr_t *);
+void rvm_anon_cache_put(pool_cache_t, void *, paddr_t);
+#endif
+
 #if defined(RVM_BOOT_POOL)
 #include <sys/pool.h>
 #include <sys/sysctl.h>
 /* These lists are initialized by rvm_mi_pool_globals(), avoiding FHR's
- * unsupported static pointer-to-field initializers. Cache code is dropped.
+ * unsupported static pointer-to-field initializers.
  */
 #undef TAILQ_HEAD_INITIALIZER
 #define TAILQ_HEAD_INITIALIZER(head) { NULL, NULL }
 #undef SYSCTL_SETUP
 #define SYSCTL_SETUP(name, desc) static void __unused name(struct sysctllog **clog)
+int rvm_mi_cache_groups_init(struct pool_allocator *) RVM_BOOT_EXPORT;
+int rvm_mi_cache_group_pool(struct pool *) RVM_BOOT_EXPORT;
+void rvm_mi_cache_groups_fini(void) RVM_BOOT_EXPORT;
+void rvm_mi_cache_setup(pool_cache_t, size_t, unsigned int, unsigned int,
+    struct pool_allocator *, int (*)(void *, void *, int),
+    void (*)(void *, void *), void *) RVM_BOOT_EXPORT;
+void *pool_cache_get_paddr(pool_cache_t, int, paddr_t *) RVM_BOOT_EXPORT;
+void pool_cache_put_paddr(pool_cache_t, void *, paddr_t) RVM_BOOT_EXPORT;
+void pool_cache_invalidate(pool_cache_t) RVM_BOOT_EXPORT;
+void pool_cache_bootstrap_destroy(pool_cache_t) RVM_BOOT_EXPORT;
 void rvm_mi_pool_globals(void) RVM_BOOT_EXPORT;
 void rvm_mi_pool_setup(struct pool *, size_t, unsigned int,
     struct pool_allocator *) RVM_BOOT_EXPORT;
@@ -171,6 +233,7 @@ bool radix_tree_empty_tagged_tree_p(struct radix_tree *, radix_tree_tagmask_t)
 #if defined(RVM_BOOT_CLOCK)
 #include <uvm/uvm_pdpolicy.h>
 void uvmpdpol_init(void) RVM_BOOT_EXPORT;
+void uvmpdpol_anfree(struct vm_anon *) RVM_BOOT_EXPORT;
 void uvmpdpol_pagedequeue(struct vm_page *) RVM_BOOT_EXPORT;
 bool uvmpdpol_pageisqueued_p(struct vm_page *) RVM_BOOT_EXPORT;
 void uvmpdpol_pagerealize(struct vm_page *) RVM_BOOT_EXPORT;

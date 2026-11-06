@@ -58,7 +58,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	krwlock_t lock;
 
 	rvm_normal_early_init(bi);
-	REQUIRE(rvm_boot_stage == 15 && !rvm_bootmap_init());
+	REQUIRE(rvm_boot_stage == 20 && !rvm_bootmap_init());
 	REQUIRE(kernel_map != NULL && kernel_map->pmap == pmap_kernel());
 	REQUIRE(vm_map_min(kernel_map) == RVM_BOOTALLOC_BASE);
 	REQUIRE(vm_map_max(kernel_map) == RVM_BOOTALLOC_BASE + RVM_BOOTALLOC_SIZE);

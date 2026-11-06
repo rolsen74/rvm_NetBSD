@@ -25,8 +25,8 @@
 struct pcb
 {
 	/*
-	 * Conservative first version: preserve all general-purpose registers.
-	 * cpu_switchto() may later save only ABI callee-saved registers.
+	 * Kernel cpu_switchto saves R10-R62 in the stack switchframe.
+	 * Only pcb_gpr[SP] is populated here; other entries remain reserved.
 	 * pcb_gpr[RVM_REG_SP] is the saved *supervisor* stack pointer
 	 * for kernel-to-kernel context switches.
 	 */

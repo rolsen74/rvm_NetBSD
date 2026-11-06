@@ -6,6 +6,8 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/condvar.h>
+#include <sys/atomic.h>
+#include <sys/xcall.h>
 #include <sys/pool.h>
 #include <sys/radixtree.h>
 #include <sys/vnode.h>
@@ -15,6 +17,7 @@
 #include <machine/psl.h>
 #include <machine/bootobject.h>
 #include <machine/bootalloc.h>
+#include <machine/bootanon.h>
 
 #define BOOT_MUTEX_MAGIC 0x52564d4cU
 struct cpu_info cpu_info_primary __attribute__((section(".data"))) = { 0 };
@@ -37,9 +40,12 @@ struct vm_page *
 uvm_pagealloc_strat(struct uvm_object *obj, voff_t offset, struct vm_anon *anon,
     int flags, int strategy, int freelist)
 {
-	if (anon != NULL || (obj != NULL && !rvm_bootobj_valid(obj)))
+	if ((anon != NULL && !rvm_bootanon_valid(anon)) ||
+	    (obj != NULL && !rvm_bootobj_valid(obj)))
 		panic(rvm_no_object);
-	if ((obj == NULL && (offset < 0 || (offset & PAGE_MASK) != 0 ||
+	if ((anon != NULL && (obj != NULL || offset != 0 ||
+	    (flags & UVM_FLAG_COLORMATCH) || !rvm_bootanon_canalloc(anon))) ||
+	    (obj == NULL && (offset < 0 || (offset & PAGE_MASK) != 0 ||
 	    (offset != 0 && !(flags & UVM_FLAG_COLORMATCH)) ||
 	    (u_long)offset >= RVM_BOOTALLOC_SIZE)) ||
 	    (obj != NULL && (!rvm_bootobj_offset(obj, offset) ||
@@ -56,12 +62,15 @@ void
 uvm_pagefree(struct vm_page *page)
 {
 	if (page == NULL || (page->flags & PG_FREE) != 0 ||
-	    page->uanon != NULL || page->loan_count != 0 ||
+	    (page->uanon != NULL && !rvm_bootanon_page_valid(page)) ||
+	    page->loan_count != 0 ||
 	    (page->uobject == NULL && page->wire_count != 0) ||
 	    (page->uobject != NULL && (!rvm_bootobj_valid(page->uobject) ||
 	    !rw_write_held(page->uobject->vmobjlock))) ||
 	    (uvm.page_init_done && PHYS_TO_VM_PAGE(VM_PAGE_TO_PHYS(page)) != page))
 		panic(rvm_bad_page);
+	if (page->uanon != NULL)
+		rvm_bootanon_page_protect(page, VM_PROT_NONE);
 	rvm_mi_pagefree(page);
 }
 
@@ -386,8 +395,28 @@ void ubc_purge(struct uvm_object *obj)
 }
 bool pmap_clear_modify(struct vm_page *page __unused) { panic(rvm_no_object); }
 void vholdl(struct vnode *vnode __unused) { panic(rvm_no_object); }
-void kpreempt_disable(void) { panic(rvm_no_sleep); }
-void kpreempt_enable(void) { panic(rvm_no_sleep); }
+void
+kpreempt_disable(void)
+{
+	check_mode();
+	if (curlwp == NULL || curlwp != curcpu()->ci_onproc || curlwp->l_cpu != curcpu() ||
+	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_nopreempt < 0 ||
+	    curlwp->l_nopreempt == 0x7fffffff)
+		panic(rvm_bad_lock);
+	curlwp->l_nopreempt++;
+	__asm volatile("" ::: "memory");
+}
+
+void
+kpreempt_enable(void)
+{
+	check_mode();
+	if (curlwp == NULL || curlwp != curcpu()->ci_onproc || curlwp->l_cpu != curcpu() ||
+	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_nopreempt <= 0 || curlwp->l_dopreempt)
+		panic(rvm_bad_lock);
+	__asm volatile("" ::: "memory");
+	curlwp->l_nopreempt--;
+}
 
 /* No daemon runs, so its progress generation remains zero. Wired NOWAIT km
  * allocation reads a ticket but never waits or asks whether reclaim can run.
@@ -438,3 +467,62 @@ int ratecheck(struct timeval *last __unused, const struct timeval *rate __unused
 void log(int level __unused, const char *message __unused, ...)
 { panic(rvm_no_sleep); }
 void xc_barrier(unsigned int flags __unused) { panic(rvm_no_sleep); }
+
+/* Only the boot CPU exists. Pool cache invalidation takes its direct UP path. */
+int ncpu __aligned(4) __attribute__((section(".data"))) = 1;
+/* mp_online uses padded loader assembly storage; GCC emits no scalar alignment. */
+
+/* These bootstrap atomics are valid only with caches and hardware IRQs off.
+ * check_mode() enforces CR == MMU. They are not the full MD atomic API.
+ */
+void *
+atomic_cas_ptr(volatile void *address, void *expected, void *replacement)
+{
+	void *volatile *slot = (void *volatile *)address;
+	void *old;
+	check_mode();
+	__asm volatile("" ::: "memory");
+	old = *slot;
+	if (old == expected)
+		*slot = replacement;
+	__asm volatile("" ::: "memory");
+	return old;
+}
+
+void
+membar_release(void)
+{
+	check_mode();
+	__asm volatile("" ::: "memory");
+}
+
+int nullop(void *arg __unused) { return 0; }
+
+/* Reaching either call means the UP bootstrap contract was violated. */
+uint64_t xc_broadcast(u_int flags __unused, xcfunc_t fn __unused,
+    void *a __unused, void *b __unused) { panic(rvm_no_sleep); }
+void xc_wait(uint64_t ticket __unused) { panic(rvm_no_sleep); }
+
+/* Page loans and delayed PG_BUSY anonymous release still require a scheduler. */
+krw_t rw_lock_op(krwlock_t *lock __unused) { panic(rvm_no_sleep); }
+void rw_obj_hold(krwlock_t *lock __unused) { panic(rvm_no_sleep); }
+
+unsigned int uvm_extrapages __attribute__((section(".data"))) = 0;
+void
+atomic_add_int(volatile unsigned int *value, int delta)
+{
+	check_mode();
+	*value += delta;
+}
+
+/* An IRQ-off bootstrap checkpoint cannot switch to another LWP. */
+void
+preempt_point(void)
+{
+	check_mode();
+	if (curlwp == NULL || curlwp != curcpu()->ci_onproc || curlwp->l_cpu != curcpu() ||
+	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_nopreempt != 0 ||
+	    curlwp->l_dopreempt || curcpu()->ci_want_resched)
+		panic(rvm_no_sleep);
+	__asm volatile("" ::: "memory");
+}

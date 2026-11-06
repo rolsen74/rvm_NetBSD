@@ -142,6 +142,12 @@ rvm_bootheap_size(int mask)
 }
 
 int
+rvm_bootheap_ready(void)
+{
+	return arena != NULL && available();
+}
+
+int
 rvm_bootheap_verify(void)
 {
 	volatile unsigned char *small, *large;

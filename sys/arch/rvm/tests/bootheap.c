@@ -26,7 +26,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	unsigned int i, j, n, previous = 0;
 
 	rvm_normal_early_init(bi);
-	REQUIRE(rvm_boot_stage == 15 && !rvm_bootheap_init());
+	REQUIRE(rvm_boot_stage == 20 && !rvm_bootheap_init());
 	before = curcpu()->ci_counts[CPU_COUNT_FREEPAGES];
 	empty(before);
 	REQUIRE(!kmem_alloc(0, KM_NOSLEEP));

@@ -7,6 +7,7 @@
 #include <machine/bootalloc.h>
 #include <machine/bootmap.h>
 #include <machine/bootobject.h>
+#include <machine/bootamap.h>
 #include <machine/psl.h>
 #include <machine/uvm_boot.h>
 
@@ -17,6 +18,8 @@ static struct vm_map_entry entries[RVM_BOOTALLOC_SLOTS]
     __attribute__((section(".data"))) = { 0 };
 static unsigned char used[RVM_BOOTALLOC_SLOTS]
     __attribute__((section(".data"))) = { 0 };
+static struct vm_amap *detaching_amap __attribute__((section(".data"))) = NULL;
+static vsize_t detaching_size __attribute__((section(".data"))) = 0;
 const char rvm_bad_map[] = "Invalid bootstrap VM map operation";
 pool_cache_t rvm_map_cache_address(void);
 int rvm_mi_map(struct vm_map *, vaddr_t *, vsize_t, struct uvm_object *,
@@ -115,6 +118,72 @@ rvm_bootmap_release(vaddr_t address, vsize_t size)
 	uvm_unmap_detach(dead, 0);
 	if (obj != NULL)
 		obj->uo_refs--;
+	return 0;
+}
+
+int
+rvm_bootmap_attach_amap(vaddr_t address, vsize_t size, struct vm_amap *amap)
+{
+	struct vm_map_entry *entry;
+	if (!available() || kernel_map == NULL || size == 0 ||
+	    ((address | size) & PAGE_MASK) != 0)
+		return EINVAL;
+	vm_map_lock(kernel_map);
+	if (!uvm_map_lookup_entry(kernel_map, address, &entry) ||
+	    entry->start != address || entry->end - address != size ||
+	    entry->etype != 0 || entry->aref.ar_amap != NULL ||
+	    entry->object.uvm_obj != NULL || entry->wired_count != 0 ||
+	    entry->protection != VM_PROT_NONE || !rvm_bootamap_entry_pin(amap, size)) {
+		vm_map_unlock(kernel_map);
+		return EINVAL;
+	}
+	entry->aref.ar_amap = amap;
+	entry->aref.ar_pageoff = 0;
+	entry->protection = VM_PROT_READ | VM_PROT_WRITE;
+	entry->max_protection = entry->protection;
+	vm_map_unlock(kernel_map);
+	return 0;
+}
+
+/* Called only by the real MI detach body under the MAP compilation profile. */
+void
+rvm_map_amap_unref(struct vm_amap *amap, vaddr_t offset, vsize_t pages, bool all)
+{
+	if (!available() || amap != detaching_amap || offset != 0 || all ||
+	    pages != detaching_size / PAGE_SIZE || !rvm_bootamap_entry_drop(amap))
+		panic(rvm_bad_map);
+	detaching_amap = NULL;
+	detaching_size = 0;
+}
+
+int
+rvm_bootmap_release_amap(vaddr_t address, vsize_t size, struct vm_amap *amap)
+{
+	struct vm_map_entry *entry, *dead;
+	if (!available() || kernel_map == NULL || size == 0 ||
+	    ((address | size) & PAGE_MASK) != 0 || amap == NULL || detaching_amap != NULL)
+		return EINVAL;
+	vm_map_lock(kernel_map);
+	if (!uvm_map_lookup_entry(kernel_map, address, &entry) ||
+	    entry->start != address || entry->end - address != size ||
+	    entry->etype != 0 || entry->aref.ar_amap != amap ||
+	    entry->aref.ar_pageoff != 0 || entry->object.uvm_obj != NULL ||
+	    entry->wired_count != 0 || rvm_bootamap_owner_lock(amap) == NULL) {
+		vm_map_unlock(kernel_map);
+		return EINVAL;
+	}
+	/* This kernel map is nonpageable: VAONLY avoids freeing anon-owned pages
+	 * through the raw km path. Remove aliases before dropping any reference.
+	 */
+	pmap_kremove(address, size);
+	pmap_update(pmap_kernel());
+	uvm_unmap_remove(kernel_map, address, address + size, &dead, UVM_FLAG_VAONLY);
+	vm_map_unlock(kernel_map);
+	detaching_amap = amap;
+	detaching_size = size;
+	uvm_unmap_detach(dead, 0);
+	if (detaching_amap != NULL)
+		panic(rvm_bad_map);
 	return 0;
 }
 
