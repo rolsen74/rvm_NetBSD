@@ -21,9 +21,12 @@
 #include <machine/boottime.h>
 #include <machine/uarea.h>
 #include <machine/generic.h>
+#include <machine/clock.h>
+#include <machine/asyncirq.h>
+#include <machine/bootwait.h>
 
 /* 1: C, 2: console, 3: memory, 4: pmap, 5: MMU, 6/7: verified, 8/9: UVM,
- * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts, 21: kernel LWP startup, 22: directed MI switching, 23: MI run queues, 24: idle/sleep/wakeup, 25: supervisor trap return, 26: timer IRQ/HALT return, 27: repeating idle deadlines, 28: MI hardclock/callouts, 29: MI uptime, 30: LWP runtime accounting, 31: guarded u-areas, 32: MI LWP VM lifecycle. */
+ * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts, 21: kernel LWP startup, 22: directed MI switching, 23: MI run queues, 24: idle/sleep/wakeup, 25: supervisor trap return, 26: timer IRQ/HALT return, 27: repeating idle deadlines, 28: MI hardclock/callouts, 29: MI uptime, 30: LWP runtime accounting, 31: guarded u-areas, 32: MI LWP VM lifecycle, 33: RTC UTC, 34: delay, 35: wall-clock steps, 36: monotonic deadlines, 37: timed LWP sleep, 38: asynchronous IRQs, 39: MI timer preemption, 40: busy GPR/SP return, 41: asynchronous kernel services, 42: MI CVs, 43: CV timeouts, 44: kpause, 45: wait channels, 46: bintime waits. */
 volatile unsigned long rvm_boot_stage
     __attribute__((section(".data"))) = 0;
 static volatile unsigned int rvm_boot_fault_active
@@ -36,6 +39,21 @@ void (*rvm_boot_vectors[RVM_BOOT_NVECTORS])(void) __aligned(16)
 const char rvm_boot_banner[] = "NetBSD/RVM early bootstrap";
 
 /* Named strings avoid temporary .LC symbols lost by the current FHR tools. */
+const char rvm_msg_cvbt[] = "RVM MI bintime waits ready; timeout conversion and remaining time verified.\n";
+const char rvm_msg_cv[] = "RVM MI condition variables ready; sleep-queue handoff and signal verified.\n";
+const char rvm_msg_cvtimeout[] = "RVM MI condition timeouts ready; timeout and early-signal cancellation verified.\n";
+const char rvm_msg_kpause[] = "RVM MI kernel pause ready; timed sleep and interlock reacquisition verified.\n";
+const char rvm_msg_wchan[] = "RVM MI wait channels ready; wakeup, timeout and no-relock verified.\n";
+const char rvm_msg_async_services[] = "RVM asynchronous kernel services ready; heap, callouts and timed sleeps verified.\n";
+const char rvm_msg_registers[] = "RVM busy IRQ return ready; general registers and stack preserved.\n";
+const char rvm_msg_async[] = "RVM asynchronous clock ready; busy IRQs, masking and elapsed tick catchup verified.\n";
+const char rvm_msg_preempt[] = "RVM timer preemption ready; busy LWPs switched through MI scheduler.\n";
+const char rvm_msg_rtc[] = "RVM RTC ready; host UTC initialized through MI timecounter.\n";
+const char rvm_msg_delay[] = "RVM delay ready; elapsed time verified with interrupts masked.\n";
+const char rvm_msg_wallclock[] = "RVM MI wall clock ready; UTC steps preserve monotonic uptime.\n";
+const char rvm_msg_deadline[] = "RVM monotonic deadlines ready; HALT waits never return early.\n";
+const char rvm_msg_tsleep[] = "RVM timed LWP sleep ready; timeout, early wake and cancellation verified.\n";
+const char rvm_msg_badplatformclock[] = "RVM platform clock verification failed at stage 0x";
 const char rvm_msg_lwpvm[] = "RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.\n";
 const char rvm_msg_badlwpvm[] = "MI LWP VM lifecycle verification failed.\n";
 const char rvm_msg_uarea[] = "RVM guarded u-areas ready; LWP stack ownership and release verified.\n";
@@ -401,10 +419,51 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	}
 	rvm_boot_stage = 32;
 	rvm_early_puts(rvm_msg_lwpvm);
+#ifndef RVM_TEST_PLATFORMCLOCK_SKIP
+	if (!rvm_rtc_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 33; rvm_early_puts(rvm_msg_rtc);
+	if (!rvm_delay_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 34; rvm_early_puts(rvm_msg_delay);
+	if (!rvm_wallclock_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 35; rvm_early_puts(rvm_msg_wallclock);
+	if (!rvm_deadline_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 36; rvm_early_puts(rvm_msg_deadline);
+	if (!rvm_tsleep_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 37; rvm_early_puts(rvm_msg_tsleep);
+#ifndef RVM_TEST_ASYNC_SKIP
+	if (!rvm_async_irq_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 38; rvm_early_puts(rvm_msg_async);
+	if (!rvm_async_preempt_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 39; rvm_early_puts(rvm_msg_preempt);
+	if (!rvm_async_register_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 40; rvm_early_puts(rvm_msg_registers);
+	if (!rvm_async_services_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 41; rvm_early_puts(rvm_msg_async_services);
+#ifndef RVM_TEST_WAIT_SKIP
+	if (!rvm_cv_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 42; rvm_early_puts(rvm_msg_cv);
+	if (!rvm_cv_timeout_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 43; rvm_early_puts(rvm_msg_cvtimeout);
+	if (!rvm_kpause_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 44; rvm_early_puts(rvm_msg_kpause);
+	if (!rvm_wchan_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 45; rvm_early_puts(rvm_msg_wchan);
+	if (!rvm_cv_bintime_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 46; rvm_early_puts(rvm_msg_cvbt);
 #endif
 #endif
 #endif
 #endif
+#endif
+#endif
+#endif
+#endif
+	return;
+#ifndef RVM_TEST_PLATFORMCLOCK_SKIP
+bad_platform_clock:
+	rvm_early_puts(rvm_msg_badplatformclock);
+	rvm_early_puthex(rvm_boot_stage);
+	rvm_boot_stop();
 #endif
 }
 

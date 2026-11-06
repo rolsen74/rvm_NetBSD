@@ -35,7 +35,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 		tc->tc_frequency = 50; tc->tc_quality = round == 0 ? 200 : 300;
 		tc->tc_name = round == 0 ? narrow_name : wide_name;
 		tc_init(tc); getbinuptime(&cached);
-		REQUIRE(bintimecmp(&live, &cached, ==) && timecounter == tc);
+		REQUIRE(bintimecmp(&live, &cached, <=) && timecounter == tc);
 		for (n = 0; n < (round == 0 ? 300U : 32U); n++) {
 			nanouptime(&before); counters[round]++;
 			curcpu()->ci_intr_depth = 1; splhigh(); hardclock(&cf);

@@ -117,3 +117,14 @@ _Static_assert(sizeof(struct rvm_exceptionframe) == RVM_XF_SIZE, "trap register 
 #include <machine/irq.h>
 _Static_assert(__builtin_offsetof(struct rvm_irqframe, exception) == 8, "IRQ saved CR");
 _Static_assert(sizeof(struct rvm_irqframe) == RVM_XF_SIZE + 8, "IRQ return frame");
+
+_Static_assert(__builtin_offsetof(struct rvm_general_driver, monotonic_ns) == 36 * 8, "monotonic register");
+_Static_assert(__builtin_offsetof(struct rvm_general_driver, rtc_seconds) == 37 * 8, "RTC seconds register");
+_Static_assert(__builtin_offsetof(struct rvm_general_driver, rtc_nanoseconds) == 38 * 8, "RTC nanoseconds register");
+
+#include <machine/asyncirq.h>
+_Static_assert(__builtin_offsetof(struct rvm_async_irqframe, irq) == 8, "async saved INTE");
+_Static_assert(sizeof(struct rvm_async_irqframe) == 544, "async interrupt frame");
+
+#include <sys/syncobj.h>
+_Static_assert(sizeof(struct syncobj) == 56, "bootstrap synchronization descriptor storage");

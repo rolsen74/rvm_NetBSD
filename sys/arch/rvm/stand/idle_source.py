@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select the real MI idle loop for the UP, IRQ-off bootstrap scheduler.
+"""Select the real MI idle loop for the guarded UP bootstrap scheduler.
 
 Running-cpuset bookkeeping and background UVM work await normal kernel startup.
 The CPU idle boundary can poll a bootstrap event source, then executes HALT.

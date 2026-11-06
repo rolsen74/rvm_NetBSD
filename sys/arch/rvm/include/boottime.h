@@ -1,4 +1,4 @@
-/* MI timecounter bootstrap; counter measures serviced hardclock ticks. */
+/* MI timecounter bootstrap; free-running GenericDriver counter. */
 #ifndef _RVM_BOOTTIME_H_
 #define _RVM_BOOTTIME_H_
 int rvm_timecounter_init(void);

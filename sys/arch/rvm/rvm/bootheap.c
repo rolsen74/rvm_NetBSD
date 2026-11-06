@@ -10,6 +10,7 @@
 #include <machine/bootheap.h>
 #include <machine/psl.h>
 #include <machine/uvm_boot.h>
+#include <machine/asyncirq.h>
 
 static struct vmem arena_store __attribute__((section(".data"))) = { 0 };
 static struct vmem_btag tags[RVM_BOOTHEAP_TAGS]
@@ -73,8 +74,8 @@ rvm_heap_release(vmem_t *source, vmem_addr_t address, vmem_size_t size)
 	uvm_km_free(kernel_map, address, size, UVM_KMF_WIRED);
 }
 
-void *
-kmem_alloc(size_t size, km_flag_t flags)
+static void *
+heap_alloc(size_t size, km_flag_t flags)
 {
 	unsigned int slot;
 	vmem_addr_t address;
@@ -96,16 +97,25 @@ kmem_alloc(size_t size, km_flag_t flags)
 }
 
 void *
+kmem_alloc(size_t size, km_flag_t flags)
+{
+	unsigned int guard = rvm_intr_suspend();
+	void *memory = heap_alloc(size, flags);
+	rvm_intr_resume(guard);
+	return memory;
+}
+void *
 kmem_zalloc(size_t size, km_flag_t flags)
 {
-	void *memory = kmem_alloc(size, flags);
-	if (memory != NULL)
-		memset(memory, 0, size);
+	unsigned int guard = rvm_intr_suspend();
+	void *memory = heap_alloc(size, flags);
+	if (memory != NULL) memset(memory, 0, size);
+	rvm_intr_resume(guard);
 	return memory;
 }
 
-void
-kmem_free(void *address, size_t size)
+static void
+heap_free(void *address, size_t size)
 {
 	unsigned int slot;
 	if (arena == NULL || !available() || address == NULL || size == 0)
@@ -122,6 +132,14 @@ kmem_free(void *address, size_t size)
 	rvm_mi_heap_free(arena, (vmem_addr_t)address, size);
 	records[slot].address = NULL;
 	records[slot].size = 0;
+}
+
+void
+kmem_free(void *address, size_t size)
+{
+	unsigned int guard = rvm_intr_suspend();
+	heap_free(address, size);
+	rvm_intr_resume(guard);
 }
 
 unsigned int

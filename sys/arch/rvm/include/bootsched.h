@@ -27,4 +27,6 @@ void rvm_bootsched_lwp_unlock(struct lwp *);
 void rvm_bootsched_unavailable(void) __dead;
 void rvm_bootsched_unlock(struct kmutex *);
 void rvm_bootsched_vmcheck(struct lwp *);
+void rvm_bootsched_preempt_lock(struct lwp *);
+void rvm_bootsched_preempt_switch(struct lwp *);
 #endif

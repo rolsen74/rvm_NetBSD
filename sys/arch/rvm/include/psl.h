@@ -55,7 +55,8 @@
 #define RVM_CREG_UD2		 11
 
 /* RTE restores the saved interrupt level and SR, per VMEmu behavior.
- * TODO: implement NetBSD spl*() and exception-entry integration.
+ * Bootstrap spl*() masks the asynchronous clock through CR at IPL_SCHED.
+ * User-mode and nested device interrupt integration remain pending.
  */
 
 #endif /* _RVM_PSL_H_ */

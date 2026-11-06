@@ -60,12 +60,16 @@
 #define rvm_btop( x ) ( (unsigned long)( x ) >> PGSHIFT )
 #define rvm_ptob( x ) ( (unsigned long)( x ) << PGSHIFT )
 
+#ifdef _KERNEL
+void delay(unsigned int);
+#define DELAY(n) delay(n)
+#endif
+
 /*
  * Pending work elsewhere in the port:
  * - Choose a kernel virtual address layout in vmparam.h.
  * - Complete managed/user pmap support for 64 KiB hardware pages.
  * - Register an RVM machine ID if a format/interface requires one.
- * - Implement DELAY() when the virtual timer is available.
  */
 
 #endif /* _RVM_PARAM_H_ */

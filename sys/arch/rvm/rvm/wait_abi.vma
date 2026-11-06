@@ -1,0 +1,50 @@
+; The compiler's bool argument homes are unpadded. Keep the public ABI and
+; canonicalize bools before entering generated C with unsigned-int homes.
+        section ".text",code
+        xdef sleepq_remove
+        xref rvm_sleepq_remove
+sleepq_remove:
+        and.q #1,r4
+        jmp rvm_sleepq_remove
+        xdef sleepq_enqueue
+        xref rvm_sleepq_enqueue
+sleepq_enqueue:
+        and.q #1,r6
+        jmp rvm_sleepq_enqueue
+        xdef sleepq_block
+        xref rvm_sleepq_block
+sleepq_block:
+        and.q #1,r3
+        jmp rvm_sleepq_block
+        xdef sleepq_unsleep
+        xref rvm_sleepq_unsleep
+sleepq_unsleep:
+        and.q #1,r3
+        jmp rvm_sleepq_unsleep
+        xdef rvm_cv_unsleep
+        xref rvm_cv_unsleep_core
+rvm_cv_unsleep:
+        and.q #1,r3
+        jmp rvm_cv_unsleep_core
+        xdef kpause
+        xref rvm_kpause
+kpause:
+        and.q #1,r3
+        jmp rvm_kpause
+        section ".data",data
+        SecAlign 8
+        xdef cv_syncobj
+cv_syncobj:
+        dc.q 0,0,0,0,0,0,0
+        xdef sched_syncobj
+sched_syncobj:
+        dc.q 0,0,0,0,0,0,0
+        xdef sleep_syncobj
+sleep_syncobj:
+        dc.q 0,0,0,0,0,0,0
+        xdef kpause_syncobj
+kpause_syncobj:
+        dc.q 0,0,0,0,0,0,0
+        xdef callout_syncobj
+callout_syncobj:
+        dc.q 0,0,0,0,0,0,0

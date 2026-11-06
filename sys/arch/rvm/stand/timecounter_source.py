@@ -16,6 +16,9 @@ header = '''
 #include <sys/atomic.h>
 #include <sys/time.h>
 #include <sys/timetc.h>
+#include <sys/syslog.h>
+#include <machine/clock.h>
+#include <machine/asyncirq.h>
 #include <machine/boot.h>
 #include <machine/pmap.h>
 #include <machine/psl.h>
@@ -27,6 +30,8 @@ header = '''
 #undef bootverbose
 #define bootverbose 0
 #define tc_init rvm_mi_tc_init
+#define tc_setclock rvm_mi_tc_setclock
+#define timestepwarnings 0
 '''
 header += source[start:end] + '''
 static struct timehands hands[10] __attribute__((section(".data"))) = { 0 };
@@ -61,9 +66,9 @@ for signature in ('static inline void\nsetrealuptime(', 'static inline u_int\ntc
                   'void\ngetbintime(', 'static inline void\ndogetnanotime(',
                   'void\ngetnanotime(', 'void\ngetmicrotime(',
                   'static void\ntc_pick(', 'void\ntc_init(', 'uint64_t\ntc_getfrequency(',
-                  'static void\ntc_windup(', 'void\ntc_ticktock('):
+                  'static void\ntc_windup(', 'void\ntc_ticktock(', 'void\ntc_setclock('):
     start = source.index(signature)
     end = source.index('\n}\n', start) + 3
     parts.append(source[start:end])
-footer = '\n#undef tc_init\n#include "' + str(Path(sys.argv[3]).resolve()) + '"\n'
+footer = '\n#undef tc_init\n#undef tc_setclock\n#include "' + str(Path(sys.argv[3]).resolve()) + '"\n'
 Path(sys.argv[2]).write_text(source[:source.index('#include <sys/cdefs.h>')] + header + '\n'.join(parts) + footer)

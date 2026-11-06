@@ -25,6 +25,12 @@ shared writable views retain their pages until the last entry is detached.
 The MD `cpu_switchto()` path now switches between kernel LWP stacks and
 preserves the compiler's callee-saved registers. This is a prerequisite for
 scheduler integration; the tests drive cooperative switches explicitly.
+Supervisor timer IRQs can now interrupt busy C code, defer callbacks to the
+return boundary, and preempt busy system LWPs through MI `preempt()`/`mi_switch()`.
+Uptime and LWP runtime use the GenericDriver free-running clock; the host
+RTC initializes UTC, and monotonic deadlines support timed kernel-LWP sleep.
+Non-interruptible MI condition variables, wait-channel wakeup and kernel pause
+now release/reacquire interlocks through real MI sleep queues and callout timeouts.
 It does not yet enter kernel `main()`, initialize full UVM km and object pagers,
 or run user processes.
 `build.sh -m rvm` is not integrated yet.
@@ -163,6 +169,20 @@ Bootstrap MI timecounter ready; uptime and timestamp reads verified.
 RVM MI runtime accounting ready; running and sleeping LWP time verified.
 RVM guarded u-areas ready; LWP stack ownership and release verified.
 RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.
+RVM RTC ready; host UTC initialized through MI timecounter.
+RVM delay ready; elapsed time verified with interrupts masked.
+RVM MI wall clock ready; UTC steps preserve monotonic uptime.
+RVM monotonic deadlines ready; HALT waits never return early.
+RVM timed LWP sleep ready; timeout, early wake and cancellation verified.
+RVM asynchronous clock ready; busy IRQs, masking and elapsed tick catchup verified.
+RVM timer preemption ready; busy LWPs switched through MI scheduler.
+RVM busy IRQ return ready; general registers and stack preserved.
+RVM asynchronous kernel services ready; heap, callouts and timed sleeps verified.
+RVM MI condition variables ready; sleep-queue handoff and signal verified.
+RVM MI condition timeouts ready; timeout and early-signal cancellation verified.
+RVM MI kernel pause ready; timed sleep and interlock reacquisition verified.
+RVM MI wait channels ready; wakeup, timeout and no-relock verified.
+RVM MI bintime waits ready; timeout conversion and remaining time verified.
 ```
 
 Addresses and condition-code bits can vary. After printing, the CPU halts
@@ -192,7 +212,13 @@ verified supervisor software-trap return, 26 after timer IRQ/HALT return, and
 28 after MI hardclock ticks and callout deadlines, and 29 after MI
 timecounter uptime and timestamp reads, 30 after MI LWP runtime accounting,
 31 after guarded system-LWP u-area allocation/release, and 32 after the
-MI LWP VM attachment/fork/exit path.
+MI LWP VM attachment/fork/exit path. Stages 33 through 37 add RTC UTC
+initialization, busy delay, MI wall-clock steps, absolute monotonic HALT waits,
+and timed LWP sleep with early-wake cancellation. Stages 38 through 41 add
+asynchronous hardclock/catchup, MI timer preemption, full busy GPR/SP return,
+and guarded heap/callout/RTC services with asynchronous sleepers. Stages 42–46
+add MI condition-variable handoff, CV timeout/cancellation, kernel pause,
+wait-channel wakeup/no-relock, and bintime-based waits.
 A fatal exception sets it to
 `0xff`, reports the hardware vector,
 frame version, saved PC and low SR flags, then halts. All 63 non-SP integer
@@ -327,8 +353,9 @@ object-pager paths stop explicitly. Full kernel builds do not use this profile.
 `uvm_support.c` supplies a bootstrap LWP, CPU counters, logical IPL bookkeeping
 and checked mutex/rwlock state for one CPU with CR exactly 8. This prevents the absent
 current LWP from being mistaken for the absent pagedaemon. Recursive locking
-and invalid unlocks stop. Condition-variable waits, unsupported pool/cache paths,
-scheduling and unsupported pager services stop if reached. Requests to wake a pagedaemon
+and invalid unlocks stop. Unsupported pool/cache and pager services stop if reached. Checked
+non-interruptible condition-variable and wait-channel sleep is now connected
+to the MI scheduler, as described at the current milestone below. Requests to wake a pagedaemon
 are recorded; allocation still returns NULL at reserve limits. This support
 file is excluded from normal kernel configuration, where the real kernel
 services must replace it. Checked nesting on the bootstrap LWP now supports
@@ -348,7 +375,8 @@ corrupts cross-page reads/writes, including saved register frames on a stack.
 The source correction is in `rvm_VMEmu/src_Emulator/Memory/Mem.c`.
 
 `make test` now defaults to `TEST_SUITE=new`, which selects only the current
-MI LWP VM lifecycle checks. `TEST_SUITE=lwpvm` selects the same scope;
+MI sleep-queue/CV checks. `TEST_SUITE=wait` selects the same scope;
+`TEST_SUITE=asyncirq` selects asynchronous interrupt/preemption checks; `TEST_SUITE=platformclock` selects platform clock and timed-sleep checks; `TEST_SUITE=lwpvm` selects MI LWP VM lifecycle checks;
 `TEST_SUITE=uarea` selects guarded stack checks,
 `TEST_SUITE=runtime` selects compiler-division and MI runtime checks, `TEST_SUITE=timecounter` selects uptime checks,
 `TEST_SUITE=hardclock` selects MI tick/callout checks,
@@ -414,7 +442,7 @@ The fixed map-entry store avoids depending on a heap or sleep support. Full kern
 builds exclude the harness and must use normal UVM startup and kernel allocators.
 Startup verifies a two-page buffer, then aligned MI wired and VA-only
 allocations, the bootstrap heap, MI pools, pool caches and anonymous pages,
-reaching stage 32 and printing:
+reaching stage 46 and printing:
 
 ```text
 Early wired allocator ready; zeroed allocation/free verified.
@@ -440,6 +468,20 @@ Bootstrap MI timecounter ready; uptime and timestamp reads verified.
 RVM MI runtime accounting ready; running and sleeping LWP time verified.
 RVM guarded u-areas ready; LWP stack ownership and release verified.
 RVM MI LWP VM lifecycle ready; u-area attachment, fork and exit verified.
+RVM RTC ready; host UTC initialized through MI timecounter.
+RVM delay ready; elapsed time verified with interrupts masked.
+RVM MI wall clock ready; UTC steps preserve monotonic uptime.
+RVM monotonic deadlines ready; HALT waits never return early.
+RVM timed LWP sleep ready; timeout, early wake and cancellation verified.
+RVM asynchronous clock ready; busy IRQs, masking and elapsed tick catchup verified.
+RVM timer preemption ready; busy LWPs switched through MI scheduler.
+RVM busy IRQ return ready; general registers and stack preserved.
+RVM asynchronous kernel services ready; heap, callouts and timed sleeps verified.
+RVM MI condition variables ready; sleep-queue handoff and signal verified.
+RVM MI condition timeouts ready; timeout and early-signal cancellation verified.
+RVM MI kernel pause ready; timed sleep and interlock reacquisition verified.
+RVM MI wait channels ready; wakeup, timeout and no-relock verified.
+RVM MI bintime waits ready; timeout conversion and remaining time verified.
 ```
 
 The emulator tests additionally cover multi-page zeroing, exact ownership,
@@ -1118,7 +1160,7 @@ queues ACK commands to the GUI thread and does not currently expose pending
 or timer register readback. The handler therefore masks the line while its
 ACK is in flight. The completed probe is idempotent and does not rearm and
 risk consuming a stale level. Repeating rearm synchronization is now supplied by the paired source below;
-MI hardclock, arbitrary-PC IRQ handling, nested IRQs and preemption remain
+At this initial milestone, MI hardclock, arbitrary-PC IRQ handling, nested IRQs and preemption remained
 pending. No emulator or GCC changes were made.
 
 Stage 26 verifies timer delivery, HALT wakeup and return at 640 MiB. The seven
@@ -1180,7 +1222,7 @@ real MI `binuptime()` service once the timecounter is ready.
 layout, scheduling/query/cancellation routines, `callout_hardclock()` and
 `callout_softclock()` from `kern/kern_timeout.c`, preserving its licenses.
 There are four levels of 256 buckets, with static bootstrap CPU storage.
-Checked standard-API wrappers register at most 32 live `callout_t` objects.
+Checked standard-API wrappers register at most 64 live `callout_t` objects (expanded from 32 for mixed MI/MD wait timers).
 They support MPSAFE initialization, runtime callback assignment, positive
 tick deadlines, reset/schedule, stop, pending/active/expired/invoking queries,
 acknowledgement and destruction. Duplicate initialization, non-MPSAFE flags,
@@ -1201,9 +1243,10 @@ Hardclock's uninitialized dependencies have explicit bootstrap adapters:
 process interval timers, entropy and heartbeat sampling are inactive; the
 statistics adapter counts idle/system CPU ticks only; scheduler clock hooks
 reset their dividers without requesting preemption. Full process accounting,
-profiling, scheduler time-slice behavior and calendar clock setting remain
-pending; MI uptime services are connected below. The timer is still armed only at explicit waits, so busy
-kernel time is not measured. Normal kernel builds must use complete MI
+profiling and scheduler time-slice behavior remain pending. The timer is still
+armed only at explicit waits, so hardclock tick accounting does not yet include
+missed ticks during busy execution. The independent monotonic source described
+below does measure busy elapsed time for uptime and LWP runtime. Normal kernel builds must use complete MI
 clock/timeout services instead of these standalone selection profiles.
 
 The nominal-epoch conversion uses the existing FHR assembly normalizer for
@@ -1222,7 +1265,7 @@ image boots through stage 28 at 640 MiB.
 `stand/timecounter_source.py` now selects the real MI timecounter read,
 registration, windup, counter-selection and tick-publication bodies from
 `kern/kern_tc.c`. Runtime setup links ten static timehands and installs a
-50 Hz counter backed by `getticks()`. Function pointers and links are assigned
+1 MHz counter derived from GenericDriver monotonic nanoseconds. Function pointers and links are assigned
 at runtime for FHR compatibility. The MI windup publishes cached timestamps
 and `time_uptime`/`time_second`; uptime follows NetBSD's initial one-second
 convention. Binary, microsecond and nanosecond uptime reads, their cached
@@ -1238,12 +1281,12 @@ only one CPU, caches off, and hardware IRQs masked before reaching C.
 Registration is checked and bounded to four live counters, with nonzero
 frequency (at most 1 GHz), a contiguous low-bit mask and no PPS hook. Counter
 replacement uses the real MI quality/frequency selection and preserves uptime.
-Detach, NTP/adjtime, PPS, RTC/calendar setting and SMP are not enabled;
-`tc_setclock()` stops explicitly. Calendar-time reads currently reflect the
-unset boot epoch and do not represent the real date. The counter advances
-only for serviced timer waits, so it still cannot measure elapsed busy kernel
-time. A free-running hardware source and normal kernel clock startup remain
-necessary.
+Detach, NTP/adjtime, PPS and SMP are not enabled. `tc_setclock()` now uses
+the selected unchanged MI wall-clock-step body, with validated timestamp and
+context boundaries. `inittodr()` reads the RTC at stage 33; earlier stages retain
+the unset boot epoch. Uptime advances during busy execution and HALT, independently
+of UTC adjustments. Normal kernel clock startup and general interrupt delivery
+remain necessary.
 
 Stage 29 checks real-IRQ uptime and timestamp conversions at 640 MiB. Seven
 `TEST_SUITE=timecounter` checks also compare cached/live reads on scheduled worker stacks at
@@ -1251,7 +1294,7 @@ Stage 29 checks real-IRQ uptime and timestamp conversions at 640 MiB. Seven
 and restore memory. Deterministic tests switch between independent 8-bit and
 32-bit counters, exercise wraparound and second crossings, and rotate MI
 timehands repeatedly. Rejection cases cover duplicate registration, zero
-frequency and unsupported calendar setting.
+frequency and invalid calendar timestamps.
 
 These checks exposed a separate GCC scalar division constraint bug: for the
 general (non-fast) DIV form, the dividend was not tied to the destination,
@@ -1268,8 +1311,8 @@ The switch profile now includes the unchanged MI `updatertime()` body from
 `kern/kern_synch.c`, replacing the no-op runtime hook. On each MI switch it
 accumulates `now - l_stime` in `l_rtime`, while MI stamps the selected LWP's
 new start time. Sleeping LWPs do not accrue time between switches, and the
-MI helper explicitly excludes LW_IDLE. These are serviced-clock runtimes:
-they reflect the current tick-backed source, not unmeasured busy wall time.
+MI helper explicitly excludes LW_IDLE. Runtime now includes busy elapsed time
+from the free-running source and excludes time spent switched out.
 The bootstrap's limited diagnostic ABI turns a backwards-clock report into a
 fatal diagnostic instead of invoking the long MI warning format.
 
@@ -1360,12 +1403,206 @@ Rejection cases cover duplicate attachment, exit before MD teardown, repeated
 exit and attaching one guarded allocation to two LWPs. The final image reaches
 stage 32 at 640 MiB.
 
-Next, implement normal scheduler and LWP exit integration, general interrupt dispatch
-and normal clock/softint startup with a free-running source, alongside the remaining normal kernel initialization dependencies.
+The Linux GenericDriver clock ABI uses read-only 64-bit big-endian registers
+36 (monotonic nanoseconds since device initialization), 37 (Unix UTC seconds),
+and 38 (fractional UTC nanoseconds). Reading seconds latches the paired fraction;
+`rvm_rtc_read()` guards the pair against interrupt or LWP interleaving on this UP kernel.
+The emulator must include the new clock-register implementation. To select the
+rebuilt sibling binary without changing the installed emulator:
+
+```sh
+VMEMU="$PWD/../rvm_VMEmu/bin/VMEmu_linux_SDL2" ./run.sh
+make -f sys/arch/rvm/Makefile.bootstrap test \
+    VMEMU="$PWD/../rvm_VMEmu/bin/VMEmu_linux_SDL2"
+```
+
+The raw nanosecond counter backs `delay()`/`DELAY()` and absolute deadlines.
+The MI timecounter uses its low 32 bits after conversion to microseconds, giving
+one-microsecond resolution and a roughly 71-minute wrap interval. Timehands must
+be wound at least once per wrap interval; the current explicit wait path does
+this on timer interrupts. The legacy mode has no heartbeat during busy execution;
+the asynchronous mode below maintains the clock during ordinary supervisor code.
+Very long masked intervals or stopped clock maintenance can still lose whole wraps. The raw
+64-bit delay/deadline source is independent of that limitation.
+
+`inittodr(base)` initializes MI UTC from a valid RTC reading, falling back to a
+nonnegative base if the RTC sample is invalid. The RTC is read-only: kernel
+wall-clock steps update MI's boot-time estimate and cached/live calendar reads,
+not the host clock. NTP and writing the RTC are pending. Live uptime advances
+between IRQs; cached `get*()` timestamps advance at windup, as in the MI core.
+The emulator's monotonic counter advances during guest HALT and host scheduling
+pauses, excluding Linux host suspend time.
+
+`rvm_clock_wait_until()` waits through the existing HALT/IRQ return path until
+an absolute raw-monotonic deadline; expired deadlines return without a new tick.
+`rvm_bootsched_sleep_until()` uses real MI callouts and switches the caller out.
+It supports the controller and sixteen registered workers, requires an active
+clock and an initialized idle LWP, returns 1 on timeout, 0 on independent early
+wakeup, and -1 for unsupported context. Callbacks recheck the absolute deadline
+before waking, so early GUI ticks cannot cause early expiration. Early wakeup
+stops/destroys the pending callout before its bounded slot is reused. This is a
+bootstrap deadline bridge. The MI sleep-queue APIs described below now provide
+`kpause()` and non-interruptible condition-variable waits as well.
+Hardclock and callout ticks still count serviced waits, not all elapsed periods;
+the asynchronous mode below adds missed-tick catchup and arbitrary-PC timer
+interrupts while preserving this legacy wait API.
+
+Stages 33–37 verify RTC initialization, interrupt-masked delay, forward/backward
+UTC steps preserving uptime, expired/future deadlines, and timed-sleep timeout,
+early wake and slot reuse. The focused default suite also runs at 16 and 64 MiB:
+two guarded worker LWPs sleep concurrently on independent deadlines, accumulate
+busy runtime while IRQs are masked, exclude blocked time, and restore physical
+pages/map entries after reaping. It checks early-wake cancellation, nested reader
+generations, MI narrow/32-bit counter wrap and invalid wall-clock calls. Test
+wrappers now use the existing FHR assembly normalization just like kernel MI
+sources; no compiler source changes are required.
+
+The separate asynchronous clock mode now admits timer IRQs at any executable
+supervisor PC on a checked current-LWP stack. Its frame saves INTE, CR, all 63
+non-SP integer registers and the version-0 hardware frame. Entry masks CR before
+C; the restore window raises hardware IPL above both timer lines until RTE has
+restored every register and the interrupted SR. Nested/device/user IRQ dispatch
+is still outside this two-timer implementation. Bad CR, vector, stack, root and
+non-executable return PC stop before modifying scheduler state.
+
+Asynchronous one-shots alternate timer lines and preserve the GUI FIFO ACK
+fence. Stop rejects callback/preemption-disabled contexts and drains the currently
+armed one-shot without rearming; the arrival
+fences the previous channel's ACK, allowing immediate restart or transition back
+to the legacy clock. A failed/unsupported start does not overwrite vectors.
+Asynchronous and legacy clocks are mutually exclusive.
+
+`splraise()`/`splx()` mask hardware clock delivery at IPL_SCHED and above. Checked
+mutexes conservatively mask all IRQs while held, with a per-CPU hold count that
+survives MI's scheduler-lock handoff. Explicit IRQ guards nest per LWP, so a
+suspended thread's guard does not disable interrupts on a newly selected worker.
+The allocator, public MI-callout adapters and RTC/UTC-setting boundaries acquire
+these guards automatically. Other bootstrap UVM/pmap interfaces still require
+guarded callers; this is not a blanket conversion of the entire kernel to
+interruptible execution. Lock contention still stops instead of sleeping.
+Uncached UP producer/consumer barriers permit IRQ-enabled timecounter readers;
+readers retry through the real MI timehands generation mechanism after preemption.
+
+The clock computes hardclock debt from the raw monotonic source. Each interrupt
+services at most 64 elapsed 20 ms periods, carries excess debt forward, and winds
+the MI timecounter. Thus timer delays and masked critical sections no longer lose
+all intervening hardclock periods. Idle/system tick classifications are still
+bootstrap statistics, not full process interval timers or profiling.
+
+Softclock callbacks run after hardware interrupt depth is cleared and logical
+IPL is restored to NONE, under an IRQ guard on the interrupted stack. They are
+deferred across raised IPL and `kpreempt_disable()` sections. They are not full
+MI softint LWPs. Explicit `preempt_point()` checkpoints also enter the checked
+preemption path when eligible, deferring inside guarded allocator operations.
+The return boundary can then enter the unchanged MI `preempt()`
+body, using checked lock adapters and real `mi_switch()`/run queues; involuntary
+switch counts are updated by MI. Complete register frames remain on each
+preempted LWP's guarded stack until that LWP resumes and returns through RTE.
+The idle LWP uses a recognized atomic HALT window and polls deferred callbacks
+before selecting a newly runnable LWP. User processes, kernel big-lock
+contention, realtime scheduling, SMP and normal scheduler startup remain pending.
+
+Stages 38–41 verify busy timer IRQs, hardware masking and elapsed tick catchup;
+non-yielding worker preemption and nested preemption-disabled sections; GPR/SP
+preservation in a busy assembly loop; and heap/callout/RTC operations on timed
+sleepers under the asynchronous clock. The focused suite additionally exercises
+three concurrent sleepers, page-crossing heap buffers, nested timecounter reader
+generations, low-IPL callback deferral, lock masking, balanced IRQ guards,
+start/stop exclusion, and corrupt frame rejection at 16/64 MiB. It restores page
+and kernel-map counts after teardown. The final 640 MiB image reaches stage 41,
+then stops the clock and halts as before. No GCC or VMEmu source changes are
+required beyond the already installed GenericDriver clock registers.
+
+An optional sustained stress case runs eight guarded LWPs with mixed-size heap
+buffers, independent deadlines, cancelled callouts, register canaries and final
+memory restoration, then checks a return to the legacy timer:
+
+```sh
+python3 sys/arch/rvm/tests/bootstrap.py --objdir obj.rvm-bootstrap \
+    --cross rvm-netbsd- --vmemu "$PWD/../rvm_VMEmu/bin/VMEmu_linux_SDL2" \
+    --suite asyncstress --stress-seconds 120
+```
+
+The current wait layer selects unchanged enqueue, sorted insert/reinsert,
+remove, block, timeout and wake bodies from `kern_sleepq.c`, and CV
+wait/signal/broadcast/bintime bodies from `kern_condvar.c`. Kernel pause,
+`mtsleep()` and `wakeup()` use their MI `kern_synch.c` bodies. The generated
+profile supplies checked UP scheduler/lock adapters and disables unavailable
+signal, tracing and big-kernel-lock paths. Ordinary kernels must use their normal
+initialization and complete services instead of this profile.
+
+`rvm_wait_init()` initializes 128 hashed sleep-queue locks and runtime syncobj
+callbacks. Up to 512 initialized CV addresses are tracked for checked lifetime;
+init, destroy, signal and empty broadcast remain usable during early allocation
+startup. Waiting additionally requires an initialized scheduler/idle LWP and an
+active legacy or asynchronous timer. The profile bypasses the MI cold-boot abort
+path only behind this checked initialization boundary; it does not mark the
+whole bootstrap kernel fully initialized.
+
+A waiter transfers its LWP mutex from the CPU scheduler lock to the MI sleep
+queue, releases the caller's adaptive interlock, and enters real `mi_switch()`.
+MI wakeup removes it, makes it runnable and queues it by effective priority. The
+interlock is reacquired before CV wait and ordinary `mtsleep()` return. Sorted
+CV queues retain FIFO order among equal priorities and reinsert after priority
+lending. Hashed wait-channel queues distinguish channel addresses even when
+they share a hash bucket. `mtsleep(..., PNORELOCK, ...)` deliberately returns
+without the interlock. Adaptive mutex ownership is now the current LWP pointer;
+spin-lock ownership retains the checked CPU handoff model. Contended adaptive
+mutex acquisition and turnstiles remain unsupported.
+
+Each waiting LWP lazily registers its own `l_timeout_ch`. Real MI timeout and
+signal-unsleep paths cancel through the synchronization object's callback, and
+`callout_halt()` uses the MI UP fast path when the LWP resumes. It may not block
+on another running callback; softclock callbacks still run synchronously under
+the existing IRQ-return guard. MD `cpu_lwp_free2()` and scheduler teardown destroy each registered timeout
+before its u-area or LWP state is reused. There are seventeen
+wait-timeout ownership slots, matching the controller plus sixteen workers.
+The callout registry now has 64 slots to cover these persistent MI timers plus
+simultaneous MD deadline timers and ordinary callbacks.
+
+Supported APIs are `cv_wait`, `cv_timedwait`, `cv_timedwaitbt`, CV signal/broadcast,
+non-interruptible `kpause` with a positive tick timeout, `mtsleep` without PCATCH,
+and `wakeup`. Timed waits return EWOULDBLOCK on expiry, and signaled waits return
+zero. Bintime waits use MI tick conversion and subtract elapsed ticks from the
+remaining budget; callers must retry a remaining sub-tick budget as usual.
+Signal-interruptible APIs and interruptible pause stop explicitly. Unsupported
+lock/context combinations, negative timeouts, duplicate CV initialization, and
+destruction with live waiters are rejected before queue mutation.
+
+Bool-argument assembly adapters preserve the standard public sleepq/kpause ABI
+and enter generated C with padded unsigned scalar homes, following the existing
+u-area/compiler ABI workaround. Synchronization descriptors use loader assembly
+storage with runtime callback assignment, avoiding FHR static pointer
+initializers. No GCC or VMEmu source changes are needed.
+
+Stages 42–46 exercise CV handoff/signal, timeout and early-signal cancellation,
+`kpause` with/without an interlock, wait-channel wakeup and PNORELOCK, and
+bintime remaining budgets. Focused tests run at 16/64 MiB, check priority lending,
+FIFO/broadcast ordering, colliding wait channels, repeated timeout reuse,
+interlock ownership and exact page/map restoration. A capacity test runs all
+sixteen worker slots with overlapping MI/MD timeouts and guarded/plain u-areas.
+The same waits are tested with the legacy explicit HALT clock. Rejection cases
+cover invalid ownership, context, timeout and CV lifetime. The final 640 MiB
+image reaches stage 46, then stops the clock and halts as before.
+
+A separate sustained test runs four producers and four consumers through a
+bounded message ring using real CV waits, broadcast, timed waits, kernel pause,
+heap-backed messages and timer preemption. It checks message totals/checksums,
+empty wait queues and complete cleanup:
+
+```sh
+python3 sys/arch/rvm/tests/bootstrap.py --objdir obj.rvm-bootstrap \
+    --cross rvm-netbsd- --vmemu "$PWD/../rvm_VMEmu/bin/VMEmu_linux_SDL2" \
+    --suite waitstress --stress-seconds 120
+```
+
+Next, implement normal scheduler/LWP exit initialization, additional device IRQ
+dispatch and normal softint startup, alongside the remaining normal kernel
+initialization dependencies.
 Object pagers, managed mapping/PV
 tracking and the remaining pmap API also remain necessary. Add kernel
-build glue, missing machine interfaces, interrupt priority operations,
-a timer and `mainbus` support to reach
+build glue, remaining machine interfaces, complete device priority mapping
+and `mainbus` support to reach
 `kern/init_main.c:main()`. The policy in `vmparam.h` remains provisional.
 
 User context switching, copyin/copyout, syscalls, signals, user executable loading,

@@ -1,5 +1,6 @@
-/* Directed kernel-LWP handoffs through real mi_switch(), with IRQs off.
- * This bridge supplies no process cleanup, timer or preemption.
+/* Kernel-LWP handoffs through MI switching, with IRQs masked during handoff.
+ * Timer return also enters the selected MI preempt() path. Process cleanup
+ * and the full normal-kernel scheduler initialization remain pending.
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -8,6 +9,10 @@
 #include <sys/cpu.h>
 #include <sys/mutex.h>
 #include <sys/idle.h>
+#include <sys/callout.h>
+#include <machine/clock.h>
+#include <machine/asyncirq.h>
+#include <machine/bootwait.h>
 #include <uvm/uvm.h>
 #include <machine/boot.h>
 #include <machine/psl.h>
@@ -28,6 +33,9 @@ static __typeof__(cpu_info_primary.ci_schedstate.spc_queue[0])
     queues[PRI_COUNT] __attribute__((section(".data"))) = { 0 };
 static int saved_spc_flags __attribute__((section(".data"))) = 0;
 static pri_t saved_maxpri __attribute__((section(".data"))) = 0;
+static unsigned int idle_guard __attribute__((section(".data"))) = 0;
+static uint64_t preemptions __attribute__((section(".data"))) = 0;
+uint64_t rvm_bootsched_preemptions(void) { return preemptions; }
 static pri_t saved_curpri __attribute__((section(".data"))) = 0;
 static struct lwp idle_lwp __attribute__((section(".data"))) = { 0 };
 static struct proc idle_proc __attribute__((section(".data"))) = { 0 };
@@ -81,7 +89,7 @@ rvm_bootsched_unlock(kmutex_t *lock)
 {
 	if (owner == NULL || !mode_ok() || curcpu()->ci_cpl != IPL_SCHED ||
 	    (curcpu()->ci_mtx_count != -2 && curcpu()->ci_mtx_count != -1) ||
-	    (lock != &sched_lock && lock != &worker_lock) || !mutex_owned(lock))
+	    (lock != &sched_lock && lock != &worker_lock && !rvm_wait_lock_valid(lock)) || !mutex_owned(lock))
 		panic(rvm_sched_bad);
 	mutex_spin_exit(lock);
 	curcpu()->ci_mtx_count++;
@@ -136,6 +144,7 @@ rvm_bootsched_fini(void)
 		memset(&idle_lwp, 0, sizeof(idle_lwp));
 		idle_poll = NULL; idle_poll_arg = NULL;
 	}
+	rvm_wait_lwp_fini(owner);
 	curcpu()->ci_schedstate.spc_queue = NULL;
 	curcpu()->ci_schedstate.spc_flags = saved_spc_flags;
 	curcpu()->ci_schedstate.spc_maxpriority = saved_maxpri;
@@ -274,6 +283,7 @@ rvm_bootsched_ready(struct lwp *l)
 static void
 runqueue_switch(int action)
 {
+	unsigned int guard = rvm_intr_suspend();
 	struct lwp *self = curlwp;
 	int exiting = action == 1;
 	int sleeping = action == 2;
@@ -301,6 +311,8 @@ runqueue_switch(int action)
 	    curcpu()->ci_mtx_count != 0 || self->l_stat != LSONPROC ||
 	    !(self->l_pflag & LP_RUNNING) || self->l_mutex != &worker_lock ||
 	    mutex_owned(&worker_lock) || mutex_owned(&sched_lock)) panic(rvm_sched_bad);
+	self->l_pflag &= ~LP_PREEMPTING;
+	rvm_intr_resume(guard);
 }
 
 void rvm_bootsched_sleep(void) { runqueue_switch(2); }
@@ -337,6 +349,7 @@ rvm_bootsched_idle_init(void (*poll)(void *), void *arg)
 void
 rvm_bootsched_idle_lock(struct lwp *l)
 {
+	idle_guard = rvm_intr_suspend();
 	if (!mode_ok() || l != &idle_lwp || l != curlwp ||
 	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_mtx_count != 0 ||
 	    l->l_mutex != &worker_lock) panic(rvm_sched_bad);
@@ -350,6 +363,7 @@ rvm_bootsched_idle_unlock(struct lwp *l)
 	if (l != &idle_lwp || l != curlwp || curcpu()->ci_cpl != IPL_SCHED ||
 	    curcpu()->ci_mtx_count != 0 || !mutex_owned(&worker_lock)) panic(rvm_sched_bad);
 	mutex_spin_exit(&worker_lock);
+	rvm_intr_resume(idle_guard);
 }
 
 void
@@ -363,11 +377,13 @@ rvm_bootsched_idle_switch(struct lwp *l)
 	if (l != curlwp || l->l_stat != LSIDL || curcpu()->ci_mtx_count != 0 ||
 	    curcpu()->ci_cpl != IPL_NONE || mutex_owned(&worker_lock) ||
 	    mutex_owned(&sched_lock)) panic(rvm_sched_bad);
+	rvm_intr_resume(idle_guard);
 }
 
 void
 cpu_idle(void)
 {
+	unsigned int guard = rvm_intr_suspend();
 	if (!mode_ok() || curlwp != &idle_lwp || !CURCPU_IDLE_P() ||
 	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_mtx_count != 0 ||
 	    idle_lwp.l_stat != LSIDL) panic(rvm_sched_bad);
@@ -376,12 +392,15 @@ cpu_idle(void)
 	if (curlwp != &idle_lwp || curcpu()->ci_cpl != IPL_NONE ||
 	    curcpu()->ci_mtx_count != 0 || !mode_ok()) panic(rvm_sched_bad);
 	if (!sched_curcpu_runnable_p()) {
-		if (rvm_clock_active()) {
+		if (rvm_async_clock_active()) {
+			rvm_async_idle_wait();
+		} else if (rvm_clock_active()) {
 			if (!rvm_clock_wait()) panic(rvm_sched_bad);
 			/* Deliver deferred wakeups after IRQ return, with IRQs off. */
 			if (idle_poll != NULL) idle_poll(idle_poll_arg);
 		} else rvm_cpu_halt();
 	}
+	rvm_intr_resume(guard);
 }
 
 static struct lwp workers[2] __attribute__((section(".data"))) = { 0 };
@@ -551,15 +570,176 @@ rvm_bootsched_runtime_verify(void)
 	cpu_lwp_fork(owner, &workers[0], NULL, 0, runtime_worker, &workers[0]);
 	if (!rvm_bootsched_ready(&workers[0])) return 0;
 	rvm_bootsched_yield();
-	if (workers[0].l_stat != LSZOMB || workers[0].l_rtime.sec != 0 ||
-	    workers[0].l_rtime.frac != 4 * ((1UL << 63) / RVM_CLOCK_HZ) ||
-	    !bintimecmp(&owner->l_rtime, &before, ==)) return 0;
+	if (workers[0].l_stat != LSZOMB || (workers[0].l_rtime.sec == 0 && workers[0].l_rtime.frac == 0) ||
+	    !bintimecmp(&owner->l_rtime, &before, >=)) return 0;
 	if (!rvm_bootsched_reap(&workers[0]) ||
 	    !rvm_bootsched_idle_init(wake_clock_owner, owner)) return 0;
 	clock_deadline = rvm_clock_ticks() + 2;
 	rvm_bootsched_sleep();
-	if (!bintimecmp(&owner->l_rtime, &before, ==) ||
+	if (!bintimecmp(&owner->l_rtime, &before, >=) ||
 	    idle_lwp.l_rtime.sec != 0 || idle_lwp.l_rtime.frac != 0) return 0;
 	return rvm_clock_stop() && rvm_bootsched_fini() &&
 	    curcpu()->ci_counts[CPU_COUNT_FREEPAGES] == pages;
+}
+
+/* Absolute monotonic timed sleeps on the existing MI callout/switch bridge.
+ * Bounded slots outlive sleeping stacks. Early wakeup cancels the timeout
+ * before the slot can be reused; callbacks never perform a context switch. */
+struct timed_sleep {
+	callout_t callout;
+	struct lwp *lwp;
+	uint64_t deadline;
+	unsigned int expired;
+};
+static struct timed_sleep sleepers[MAX_WORKERS + 1]
+    __attribute__((section(".data"))) = { 0 };
+
+static int
+sleep_ticks(uint64_t remaining)
+{
+	uint64_t quantum = 1000000000U / RVM_CLOCK_HZ;
+	uint64_t ticks = remaining / quantum + (remaining % quantum != 0);
+	return ticks > INT_MAX ? INT_MAX : (ticks == 0 ? 1 : (int)ticks);
+}
+static void
+timed_wakeup(void *arg)
+{
+	struct timed_sleep *s = arg;
+	uint64_t now = rvm_clock_monotonic_ns();
+	if (s->lwp == NULL || cpu_intr_p() || curcpu()->ci_cpl != IPL_NONE)
+		panic(rvm_sched_bad);
+	/* An independent event may already have made this LWP runnable. */
+	if (s->lwp->l_stat != LSSLEEP) return;
+	if (now < s->deadline) {
+		callout_reset(&s->callout, sleep_ticks(s->deadline - now), timed_wakeup, s);
+		return;
+	}
+	s->expired = 1;
+	if (!rvm_bootsched_ready(s->lwp)) panic(rvm_sched_bad);
+}
+static int
+sleep_until(uint64_t deadline)
+{
+	struct timed_sleep *s = NULL;
+	uint64_t now;
+	unsigned int i;
+	int result;
+	if (!mode_ok() || owner == NULL || (!rvm_clock_active() && !rvm_async_clock_active()) ||
+	    rvm_bootclock_busy() || cpu_intr_p() || curcpu()->ci_cpl != IPL_NONE ||
+	    curcpu()->ci_mtx_count != 0 || curlwp == NULL ||
+	    curlwp == &idle_lwp || (curlwp != owner && member(curlwp) == -1) ||
+	    curlwp->l_stat != LSONPROC || curlwp->l_nopreempt != 0 ||
+	    curcpu()->ci_data.cpu_idlelwp != &idle_lwp) return -1;
+	now = rvm_clock_monotonic_ns();
+	if (now >= deadline) return 1;
+	for (i = 0; i < __arraycount(sleepers); i++) {
+		if (sleepers[i].lwp == curlwp) return -1;
+		if (s == NULL && sleepers[i].lwp == NULL) s = &sleepers[i];
+	}
+	if (s == NULL) return -1;
+	s->lwp = curlwp; s->deadline = deadline; s->expired = 0;
+	callout_init(&s->callout, CALLOUT_MPSAFE);
+	callout_reset(&s->callout, sleep_ticks(deadline - now), timed_wakeup, s);
+	rvm_bootsched_sleep();
+	result = s->expired;
+	callout_stop(&s->callout);
+	callout_destroy(&s->callout);
+	s->lwp = NULL;
+	return result;
+}
+
+int
+rvm_bootsched_sleep_until(uint64_t deadline)
+{
+	unsigned int guard = rvm_intr_suspend();
+	int result = sleep_until(deadline);
+	rvm_intr_resume(guard);
+	return result;
+}
+void rvm_mi_preempt(void);
+
+void
+rvm_bootsched_preempt(void)
+{
+	if (!mode_ok() || owner == NULL || !rvm_async_clock_active() ||
+	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_irq_locks != 0 ||
+	    curcpu()->ci_mtx_count != 0 || rvm_bootclock_busy() ||
+	    curlwp == NULL || (curlwp->l_flag & LW_IDLE) ||
+	    curlwp->l_nopreempt != 0 || !curcpu()->ci_want_resched) return;
+	if (curcpu()->ci_schedstate.spc_count == 0) {
+		curcpu()->ci_want_resched = 0;
+		return;
+	}
+	preemptions++;
+	rvm_mi_preempt();
+}
+
+void
+rvm_bootsched_preempt_lock(struct lwp *l)
+{
+	if (!mode_ok() || owner == NULL || l == NULL || l != curlwp ||
+	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_mtx_count != 0 ||
+	    curcpu()->ci_irq_locks != 0 || l->l_stat != LSONPROC ||
+	    l->l_mutex != &worker_lock || l->l_nopreempt != 0 ||
+	    l->l_md.md_irq_hold == 0 || l->l_blcnt != 0 ||
+	    (l->l_pflag & (LP_INTR | LP_PREEMPTING)) || l->l_switchto != NULL ||
+	    l->l_target_cpu != NULL || l->l_lwpctl != NULL || l->l_class != SCHED_OTHER)
+		panic(rvm_sched_bad);
+	rvm_bootsched_vmcheck(l);
+	curcpu()->ci_mtx_oldspl = IPL_NONE;
+	mutex_spin_enter(&worker_lock);
+}
+void
+rvm_bootsched_preempt_switch(struct lwp *l)
+{
+	if (!mode_ok() || l != curlwp || curcpu()->ci_cpl != IPL_SCHED ||
+	    curcpu()->ci_mtx_count != 0 || !mutex_owned(&worker_lock) ||
+	    !mutex_owned(&sched_lock) || !(l->l_pflag & LP_PREEMPTING)) panic(rvm_sched_bad);
+	curcpu()->ci_mtx_count = -2;
+	mi_switch(l);
+	if (l != curlwp || l->l_stat != LSONPROC || curcpu()->ci_cpl != IPL_NONE ||
+	    curcpu()->ci_mtx_count != 0 || curcpu()->ci_irq_locks != 0 ||
+	    mutex_owned(&worker_lock) || mutex_owned(&sched_lock)) panic(rvm_sched_bad);
+	l->l_pflag &= ~LP_PREEMPTING;
+}
+
+/* MI sleepq lock transfer and scheduler handoff, UP and kernel-only. */
+int rvm_wait_scheduler_ready(void)
+{ return owner != NULL && curcpu()->ci_data.cpu_idlelwp == &idle_lwp; }
+void rvm_wait_lwp_lock(struct lwp *l)
+{
+	if (!mode_ok() || owner == NULL || l == NULL || l->l_mutex == NULL ||
+	    (l != owner && l != &idle_lwp && member(l) == -1)) panic(rvm_sched_bad);
+	mutex_spin_enter(l->l_mutex);
+}
+void rvm_wait_lwp_unlock(struct lwp *l)
+{ mutex_spin_exit(l->l_mutex); }
+void rvm_wait_lwp_unlock_to(struct lwp *l, struct kmutex *lock)
+{
+	kmutex_t *old = l->l_mutex;
+	if (!mutex_owned(old) || !mutex_owned(lock) || !rvm_wait_lock_valid(lock))
+		panic(rvm_sched_bad);
+	lwp_setlock(l, lock); mutex_spin_exit(old); splsched();
+}
+void rvm_wait_resched(struct lwp *l, unsigned int unlock)
+{
+	if (!unlock || l->l_cpu != curcpu() || l->l_stat != LSRUN ||
+	    l->l_mutex != &sched_lock || !mutex_owned(&sched_lock)) panic(rvm_sched_bad);
+	curcpu()->ci_want_resched = 1;
+	mutex_spin_exit(&sched_lock);
+}
+void rvm_wait_switch(struct lwp *l)
+{
+	if (!mode_ok() || !rvm_wait_scheduler_ready() || l != curlwp ||
+	    l->l_stat != LSSLEEP || l->l_nopreempt != 0 || l->l_blcnt != 0 ||
+	    !(l->l_pflag & LP_RUNNING) || l->l_md.md_irq_hold == 0 ||
+	    (l->l_mutex != &worker_lock && !rvm_wait_lock_valid(l->l_mutex)) ||
+	    !mutex_owned(l->l_mutex) || !mutex_owned(&sched_lock) ||
+	    curcpu()->ci_irq_locks != 2 || curcpu()->ci_mtx_count != 0) panic(rvm_sched_bad);
+	splsched(); curcpu()->ci_mtx_oldspl = IPL_NONE; curcpu()->ci_mtx_count = -2;
+	mi_switch(l);
+	if (l != curlwp || l->l_stat != LSONPROC || l->l_mutex != &worker_lock ||
+	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_mtx_count != 0 ||
+	    curcpu()->ci_irq_locks != 0 || l->l_wchan != NULL || l->l_sleepq != NULL)
+		panic(rvm_sched_bad);
 }

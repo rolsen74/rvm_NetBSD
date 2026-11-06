@@ -83,6 +83,7 @@ rvm_cpu_lwp_prepare(struct lwp *l, vaddr_t base, vsize_t size,
 	l->l_md.md_kstack_base = base + roundup(sizeof(*pcb), 16);
 	l->l_md.md_kstack_size = size - roundup(sizeof(*pcb), 16);
 	l->l_md.md_startup = 0;
+	l->l_md.md_irq_hold = 0;
 	return 1;
 }
 
@@ -97,6 +98,7 @@ rvm_cpu_lwp_discard(struct lwp *l)
 	l->l_md.md_pcb = NULL;
 	l->l_md.md_kstack_base = 0;
 	l->l_md.md_kstack_size = 0;
+	l->l_md.md_irq_hold = 0;
 	l->l_md.md_startup = 0;
 	return 1;
 }

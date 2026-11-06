@@ -22,12 +22,13 @@ header = '''
 '''
 layout_start = source.index('#define BUCKETS')
 layout_end = source.index('\n#ifdef DDB', layout_start)
-functions = ('callout_init', 'callout_destroy', 'callout_reset', 'callout_schedule',
+functions = ('callout_halt', 'callout_init', 'callout_destroy', 'callout_reset', 'callout_schedule',
              'callout_stop', 'callout_setfunc', 'callout_expired', 'callout_active',
              'callout_pending', 'callout_invoking', 'callout_ack', 'callout_hardclock')
 for name in functions:
     header += f'#define {name} rvm_mi_{name}\n'
 header += '''
+static void callout_wait(callout_impl_t *c __unused, void *interlock __unused, kmutex_t *lock __unused) { panic(rvm_callout_bad); }
 static struct callout_cpu callout_cpu0 __attribute__((section(".data"))) = { 0 };
 static unsigned int soft_pending __attribute__((section(".data"))) = 0;
 static void *callout_sih __attribute__((section(".data"))) = NULL;

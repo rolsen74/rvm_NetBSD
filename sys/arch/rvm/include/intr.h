@@ -1,4 +1,4 @@
-/* Logical IPLs. Bootstrap spl bookkeeping exists; hardware dispatch is pending. */
+/* UP IPLs. The asynchronous clock is masked at IPL_SCHED and above. */
 #ifndef _RVM_INTR_H_
 #define _RVM_INTR_H_
 

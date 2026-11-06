@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Select unchanged MI switch/next-LWP bodies for IRQ-off kernel scheduling.
+"""Select unchanged MI switch/next-LWP/preempt bodies for UP scheduling.
 
-Run queues use selected real UP operations. Soft interrupts, timers
-and tracing remain unavailable. Directed and queue-selected switches are
-supported. Normal kernel builds link kern_synch.c instead.
+Run queues use selected real UP operations. Hardware timer return can
+preempt supervisor LWPs; normal softint LWPs and tracing remain unavailable. Normal kernel builds link kern_synch.c instead.
 """
 from pathlib import Path
 import sys
@@ -56,5 +55,25 @@ runtime_start = source.index('void\nupdatertime(')
 runtime_end = source.index('\n}\n', runtime_start) + 3
 next_start = source.index('static inline lwp_t *\nnextlwp(')
 next_end = source.index('\n}\n', next_start) + 3
+preempt_start = source.index('void\npreempt(void)\n{')
+preempt_end = source.index('\n}\n', preempt_start) + 3
+preempt_header = r'''
+/* Keep the real MI preempt entry; these checked adapters model only the
+ * scheduler spin-lock handoff and the absent big kernel lock. */
+#undef lwp_lock
+#define lwp_lock rvm_bootsched_preempt_lock
+#define mi_switch rvm_bootsched_preempt_switch
+#define preempt rvm_mi_preempt
+#undef KERNEL_UNLOCK_ALL
+#undef KERNEL_LOCK
+static void rvm_preempt_unlock(struct lwp *l, int *n)
+{
+    if (l->l_blcnt != 0) rvm_bootsched_unavailable();
+    *n = 0;
+}
+#define KERNEL_UNLOCK_ALL(l, n) rvm_preempt_unlock(l, n)
+#define KERNEL_LOCK(n, l) do { if ((n) != 0 || (l)->l_blcnt != 0) rvm_bootsched_unavailable(); } while (0)
+'''
 Path(sys.argv[2]).write_text(source[:license_end] + header +
-    source[runtime_start:runtime_end] + source[next_start:next_end] + source[start:end])
+    source[runtime_start:runtime_end] + source[next_start:next_end] + source[start:end]
+    + preempt_header + source[preempt_start:preempt_end])

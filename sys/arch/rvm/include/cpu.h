@@ -40,6 +40,7 @@ struct cpu_info
 	volatile unsigned int ci_intr_depth;
 	int					  ci_cpl; /* current interrupt priority */
 	int					  ci_want_resched;
+	unsigned int ci_irq_locks; /* IRQ-off checked mutexes held on this CPU */
 	int ci_mtx_oldspl;
 	int ci_mtx_count; /* MI scheduler spin-lock handoff count */
 };
@@ -80,8 +81,8 @@ cpu_intr_p ( void )
 }
 
 /*
- * TODO: implement hardware interrupt masking and trap return.
- * TODO: add timer/clock support and preemption beyond cooperative switching.
+ * Supervisor timer entry/return and UP timer preemption are implemented.
+ * TODO: user-mode/nested device interrupts and full kernel scheduler startup.
  * TODO: revisit CPU_INFO_FOREACH when SMP support is introduced.
  */
 

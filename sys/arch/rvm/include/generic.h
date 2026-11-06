@@ -30,7 +30,10 @@ struct rvm_general_driver {
 	uint64_t mouse;
 	uint64_t reserved3;
 	struct rvm_generic_timer timer[8]; /* registers 4..35 */
-	uint64_t reserved36[4];
+	uint64_t monotonic_ns;             /* register 36: ns since VM start */
+	uint64_t rtc_seconds;              /* register 37: latches fractional ns */
+	uint64_t rtc_nanoseconds;          /* register 38: consumes latched ns */
+	uint64_t reserved39;
 	uint64_t term_control;             /* register 40 */
 	uint64_t term_apen;
 	uint64_t term_bpen;

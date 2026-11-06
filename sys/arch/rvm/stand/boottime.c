@@ -6,12 +6,18 @@ static struct timecounter rvm_counter __attribute__((section(".data"))) = { 0 };
 static struct timecounter *registered[4] __attribute__((section(".data"))) = { 0 };
 static unsigned int nregistered __attribute__((section(".data"))) = 0;
 const char rvm_tc_bad[] = "Invalid bootstrap MI timecounter operation";
-const char rvm_tc_name[] = "rvm-serviced-ticks";
+const char rvm_tc_name[] = "rvm-monotonic-us";
 const char rvm_tc_dummy[] = "rvm-early-ticks";
 static u_int
 read_ticks(struct timecounter *tc __unused)
 {
 	return (u_int)getticks();
+}
+static u_int
+read_monotonic(struct timecounter *tc __unused)
+{
+	/* 1 MHz gives MI a 71-minute wrap interval rather than 4.3 seconds. */
+	return (u_int)(rvm_clock_monotonic_ns() / 1000);
 }
 static int
 context_ok(void)
@@ -60,9 +66,9 @@ rvm_timecounter_init(void)
 	hands[0].th_generation = 1;
 	timehands = &hands[0];
 	setrealuptime(1, 1);
-	rvm_counter.tc_get_timecount = read_ticks;
+	rvm_counter.tc_get_timecount = read_monotonic;
 	rvm_counter.tc_counter_mask = UINT_MAX;
-	rvm_counter.tc_frequency = RVM_CLOCK_HZ;
+	rvm_counter.tc_frequency = RVM_TIMECOUNTER_FREQUENCY;
 	rvm_counter.tc_quality = 100;
 	rvm_counter.tc_name = rvm_tc_name;
 	initialized = 1;
@@ -79,7 +85,11 @@ rvm_timecounter_tick(void)
 	tc_ticktock();
 }
 void
-tc_setclock(const struct timespec *ts __unused)
+tc_setclock(const struct timespec *ts)
 {
-	panic(rvm_tc_bad); /* No RTC, UTC setting, NTP or adjtime service yet. */
+	unsigned int guard = rvm_intr_suspend();
+	if (!initialized || !context_ok() || ts == NULL || ts->tv_sec < 0 ||
+	    ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000) panic(rvm_tc_bad);
+	rvm_mi_tc_setclock(ts);
+	rvm_intr_resume(guard);
 }

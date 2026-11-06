@@ -1,5 +1,7 @@
+#include <machine/asyncirq.h>
+#include <machine/bootwait.h>
 /* Included after the selected MI bodies; private layout stays in that unit. */
-#define RVM_CALLOUT_MAX 32
+#define RVM_CALLOUT_MAX 64
 static kmutex_t callout_lock_store __attribute__((section(".data"))) = { 0 };
 static callout_t *registered[RVM_CALLOUT_MAX] __attribute__((section(".data"))) = { 0 };
 static unsigned int initialized __attribute__((section(".data"))) = 0;
@@ -17,7 +19,8 @@ static void
 callout_context(void)
 {
 	if (!initialized || rvm_boot_get_cr() != RVM_CR_MMU || cpu_intr_p() ||
-	    curcpu()->ci_cpl != IPL_NONE || curlwp == NULL || curlwp != curcpu()->ci_onproc)
+	    (curcpu()->ci_cpl != IPL_NONE &&
+	    !(curcpu()->ci_cpl == IPL_SCHED && rvm_wait_blocking())) || curlwp == NULL || curlwp != curcpu()->ci_onproc)
 		panic(rvm_callout_bad);
 }
 static callout_impl_t *
@@ -57,8 +60,8 @@ rvm_callout_poll(void)
 	callout_softclock(NULL);
 	dispatching = 0;
 }
-void
-callout_init(callout_t *cs, u_int flags)
+static void
+masked_callout_init(callout_t *cs, u_int flags)
 {
 	int index;
 	callout_context();
@@ -68,8 +71,8 @@ callout_init(callout_t *cs, u_int flags)
 	rvm_mi_callout_init(cs, flags);
 	registered[index] = cs;
 }
-void
-callout_destroy(callout_t *cs)
+static void
+masked_callout_destroy(callout_t *cs)
 {
 	callout_impl_t *c = checked(cs);
 	int index = slot(cs);
@@ -83,34 +86,68 @@ schedule_ok(callout_t *cs, int ticks)
 	checked(cs);
 	if (ticks <= 0) panic(rvm_callout_bad);
 }
-void callout_reset(callout_t *cs, int ticks, void (*fn)(void *), void *arg)
+static void masked_callout_reset(callout_t *cs, int ticks, void (*fn)(void *), void *arg)
 {
 	schedule_ok(cs, ticks);
 	if (fn == NULL) panic(rvm_callout_bad);
 	rvm_mi_callout_reset(cs, ticks, fn, arg);
 }
-void callout_setfunc(callout_t *cs, void (*fn)(void *), void *arg)
+static void masked_callout_setfunc(callout_t *cs, void (*fn)(void *), void *arg)
 {
 	checked(cs);
 	if (fn == NULL) panic(rvm_callout_bad);
 	rvm_mi_callout_setfunc(cs, fn, arg);
 }
-void callout_schedule(callout_t *cs, int ticks)
+static void masked_callout_schedule(callout_t *cs, int ticks)
 {
 	schedule_ok(cs, ticks);
 	if (((callout_impl_t *)cs)->c_func == NULL) panic(rvm_callout_bad);
 	rvm_mi_callout_schedule(cs, ticks);
 }
-bool callout_stop(callout_t *cs) { checked(cs); return rvm_mi_callout_stop(cs); }
-bool callout_pending(callout_t *cs) { checked(cs); return rvm_mi_callout_pending(cs); }
-bool callout_active(callout_t *cs) { checked(cs); return rvm_mi_callout_active(cs); }
-bool callout_expired(callout_t *cs) { checked(cs); return rvm_mi_callout_expired(cs); }
-bool callout_invoking(callout_t *cs) { checked(cs); return rvm_mi_callout_invoking(cs); }
-void callout_ack(callout_t *cs) { checked(cs); rvm_mi_callout_ack(cs); }
+static bool masked_callout_stop(callout_t *cs) { checked(cs); return rvm_mi_callout_stop(cs); }
+static bool masked_callout_pending(callout_t *cs) { checked(cs); return rvm_mi_callout_pending(cs); }
+static bool masked_callout_active(callout_t *cs) { checked(cs); return rvm_mi_callout_active(cs); }
+static bool masked_callout_expired(callout_t *cs) { checked(cs); return rvm_mi_callout_expired(cs); }
+static bool masked_callout_invoking(callout_t *cs) { checked(cs); return rvm_mi_callout_invoking(cs); }
+static void masked_callout_ack(callout_t *cs) { checked(cs); rvm_mi_callout_ack(cs); }
 void
 callout_hardclock(void)
 {
 	if (!initialized || !cpu_intr_p() || curcpu()->ci_cpl != IPL_HIGH ||
 	    rvm_boot_get_cr() != RVM_CR_MMU) panic(rvm_callout_bad);
 	rvm_mi_callout_hardclock();
+}
+
+/* Public callout operations remain usable with the asynchronous clock enabled.
+ * Keep the guard through validation, wheel updates and ownership bookkeeping. */
+void callout_init(callout_t *c, u_int flags)
+{ unsigned int g = rvm_intr_suspend(); masked_callout_init(c, flags); rvm_intr_resume(g); }
+void callout_destroy(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); masked_callout_destroy(c); rvm_intr_resume(g); }
+void callout_reset(callout_t *c, int ticks, void (*fn)(void *), void *arg)
+{ unsigned int g = rvm_intr_suspend(); masked_callout_reset(c, ticks, fn, arg); rvm_intr_resume(g); }
+void callout_setfunc(callout_t *c, void (*fn)(void *), void *arg)
+{ unsigned int g = rvm_intr_suspend(); masked_callout_setfunc(c, fn, arg); rvm_intr_resume(g); }
+void callout_schedule(callout_t *c, int ticks)
+{ unsigned int g = rvm_intr_suspend(); masked_callout_schedule(c, ticks); rvm_intr_resume(g); }
+void callout_ack(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); masked_callout_ack(c); rvm_intr_resume(g); }
+bool callout_stop(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); bool result = masked_callout_stop(c); rvm_intr_resume(g); return result; }
+bool callout_pending(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); bool result = masked_callout_pending(c); rvm_intr_resume(g); return result; }
+bool callout_active(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); bool result = masked_callout_active(c); rvm_intr_resume(g); return result; }
+bool callout_expired(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); bool result = masked_callout_expired(c); rvm_intr_resume(g); return result; }
+bool callout_invoking(callout_t *c)
+{ unsigned int g = rvm_intr_suspend(); bool result = masked_callout_invoking(c); rvm_intr_resume(g); return result; }
+
+bool callout_halt(callout_t *c, void *interlock)
+{
+	unsigned int g = rvm_intr_suspend(); bool result;
+	checked(c);
+	if (dispatching || interlock != NULL) panic(rvm_callout_bad);
+	result = rvm_mi_callout_halt(c, interlock);
+	rvm_intr_resume(g); return result;
 }

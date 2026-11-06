@@ -10,6 +10,7 @@ struct mdlwp {
 	struct pcb *md_pcb;
 	vaddr_t md_kstack_base;
 	vsize_t md_kstack_size;
+	unsigned int md_irq_hold; /* IRQ guard nesting, preserved across switches */
 	unsigned int md_startup; /* MI first-entry handoff pending */
 };
 

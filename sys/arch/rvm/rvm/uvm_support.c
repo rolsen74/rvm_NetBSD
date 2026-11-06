@@ -1,6 +1,7 @@
 /*
- * Services for standalone MI pages and maps. One CPU, CR == MMU only:
- * mutexes, rwlocks and logical IPLs have state but may not sleep or contend.
+ * Services for standalone MI pages and maps. One CPU, guarded state changes:
+ * checked mutexes/rwlocks may not sleep or contend. spl* masks the clock,
+ * and uncached UP barriers also support asynchronous timecounter readers.
  * Full kernels must replace this file with NetBSD's normal kernel services.
  */
 #include <sys/param.h>
@@ -18,6 +19,7 @@
 #include <machine/bootobject.h>
 #include <machine/bootalloc.h>
 #include <machine/bootanon.h>
+#include <machine/asyncirq.h>
 
 #define BOOT_MUTEX_MAGIC 0x52564d4cU
 struct cpu_info cpu_info_primary __attribute__((section(".data"))) = { 0 };
@@ -87,33 +89,42 @@ rvm_uvm_cpuinit(void)
 	cpu_info_primary.ci_onproc = &bootstrap_lwp;
 }
 
-static void
-check_mode(void)
+const char rvm_bad_mode_pc[] = "IRQ-off service caller PC 0x";
+void __dead
+rvm_bad_mode(vaddr_t pc)
 {
-	if (rvm_boot_get_cr() != RVM_CR_MMU)
-		panic(rvm_bad_lock);
+	rvm_early_puts(rvm_bad_mode_pc);
+	rvm_early_puthex(pc);
+	panic(rvm_bad_lock);
 }
+void rvm_check_mode(void);
+#define check_mode rvm_check_mode
 
 int
 splraise(int ipl)
 {
-	int old = curcpu()->ci_cpl;
+	int old;
 
+	rvm_intr_disable();
+	old = curcpu()->ci_cpl;
 	check_mode();
 	if (ipl < IPL_NONE || ipl > IPL_HIGH)
 		panic(rvm_bad_lock);
 	if (ipl > old)
 		curcpu()->ci_cpl = ipl;
+	rvm_intr_apply();
 	return old;
 }
 
 void
 splx(int ipl)
 {
+	rvm_intr_disable();
 	check_mode();
 	if (ipl < IPL_NONE || ipl > IPL_HIGH)
 		panic(rvm_bad_lock);
 	curcpu()->ci_cpl = ipl;
+	rvm_intr_apply();
 }
 
 void
@@ -125,6 +136,7 @@ spl0(void)
 void
 mutex_init(kmutex_t *lock, kmutex_type_t type, int ipl)
 {
+	unsigned int guard = rvm_intr_suspend();
 	check_mode();
 	if (type < MUTEX_SPIN || type > MUTEX_NODEBUG ||
 	    ipl < IPL_NONE || ipl > IPL_HIGH)
@@ -133,26 +145,35 @@ mutex_init(kmutex_t *lock, kmutex_type_t type, int ipl)
 	lock->mtx_magic = BOOT_MUTEX_MAGIC;
 	lock->mtx_ipl = ipl;
 	lock->mtx_oldipl = IPL_NONE;
+	rvm_intr_resume(guard);
 }
 
 void
 mutex_enter(kmutex_t *lock)
 {
+	rvm_intr_disable();
 	check_mode();
 	if (lock->mtx_magic != BOOT_MUTEX_MAGIC || lock->mtx_state != 0)
 		panic(rvm_bad_lock);
+	if (curcpu()->ci_irq_locks == UINT_MAX) panic(rvm_bad_lock);
+	curcpu()->ci_irq_locks++;
 	lock->mtx_oldipl = splraise(lock->mtx_ipl);
-	lock->mtx_state = 1;
+	if (lock->mtx_ipl == IPL_NONE && curlwp == NULL) panic(rvm_bad_lock);
+	lock->mtx_state = lock->mtx_ipl == IPL_NONE ? (uintptr_t)curlwp : 1;
 }
 
 void
 mutex_exit(kmutex_t *lock)
 {
 	check_mode();
-	if (lock->mtx_magic != BOOT_MUTEX_MAGIC || lock->mtx_state != 1)
+	if (lock->mtx_magic != BOOT_MUTEX_MAGIC ||
+	    lock->mtx_state != (lock->mtx_ipl == IPL_NONE ? (uintptr_t)curlwp : 1) ||
+	    curcpu()->ci_irq_locks == 0)
 		panic(rvm_bad_lock);
 	lock->mtx_state = 0;
-	splx(lock->mtx_oldipl);
+	curcpu()->ci_irq_locks--;
+	if (lock->mtx_ipl != IPL_NONE) splx(lock->mtx_oldipl);
+	else rvm_intr_apply();
 }
 
 void mutex_spin_enter(kmutex_t *lock) { mutex_enter(lock); }
@@ -161,11 +182,14 @@ void mutex_spin_exit(kmutex_t *lock) { mutex_exit(lock); }
 int
 mutex_tryenter(kmutex_t *lock)
 {
+	rvm_intr_disable();
 	check_mode();
 	if (lock->mtx_magic != BOOT_MUTEX_MAGIC)
 		panic(rvm_bad_lock);
-	if (lock->mtx_state != 0)
+	if (lock->mtx_state != 0) {
+		rvm_intr_apply();
 		return 0;
+	}
 	mutex_enter(lock);
 	return 1;
 }
@@ -173,54 +197,26 @@ mutex_tryenter(kmutex_t *lock)
 int
 mutex_owned(const kmutex_t *lock)
 {
+	unsigned int guard = rvm_intr_suspend();
+	int result;
 	check_mode();
-	if (lock->mtx_magic != BOOT_MUTEX_MAGIC)
-		panic(rvm_bad_lock);
-	return lock->mtx_state == 1;
+	if (lock->mtx_magic != BOOT_MUTEX_MAGIC) panic(rvm_bad_lock);
+	result = lock->mtx_state != 0 &&
+	    (lock->mtx_ipl != IPL_NONE || lock->mtx_state == (uintptr_t)curlwp);
+	rvm_intr_resume(guard);
+	return result;
 }
 
 void
 mutex_destroy(kmutex_t *lock)
 {
+	unsigned int guard = rvm_intr_suspend();
 	check_mode();
 	if (lock->mtx_magic != BOOT_MUTEX_MAGIC || lock->mtx_state != 0)
 		panic(rvm_bad_lock);
 	lock->mtx_magic = 0;
+	rvm_intr_resume(guard);
 }
-
-void
-cv_init(kcondvar_t *cv, const char *name)
-{
-	cv->cv_opaque[0] = __UNCONST(name);
-	cv->cv_opaque[1] = NULL;
-}
-
-void
-cv_broadcast(kcondvar_t *cv)
-{
-	check_mode();
-	if (cv->cv_opaque[0] == NULL || cv->cv_opaque[1] != NULL)
-		panic(rvm_no_sleep);
-	/* No waiters exist: the bootstrap does not permit cv_wait(). */
-}
-
-void cv_wait(kcondvar_t *cv __unused, kmutex_t *lock __unused)
-{ panic(rvm_no_sleep); }
-int cv_wait_sig(kcondvar_t *cv __unused, kmutex_t *lock __unused)
-{ panic(rvm_no_sleep); }
-
-
-void
-cv_destroy(kcondvar_t *cv)
-{
-	check_mode();
-	if (cv->cv_opaque[1] != NULL)
-		panic(rvm_no_sleep);
-	cv->cv_opaque[0] = NULL;
-}
-
-int kpause(const char *message __unused, bool intr __unused,
-    int ticks __unused, kmutex_t *lock __unused) { panic(rvm_no_sleep); }
 
 size_t
 strlcpy(char *to, const char *from, size_t size)
@@ -345,8 +341,6 @@ memset(void *destination, int value, size_t size)
 }
 
 int hz __attribute__((section(".data"))) = 100;
-int cv_timedwait(kcondvar_t *cv __unused, kmutex_t *lock __unused,
-    int ticks __unused) { panic(rvm_no_sleep); }
 void abort(void) { panic(rvm_abort); }
 
 struct vm_amap *amap_alloc(vaddr_t size __unused, vaddr_t pad __unused,
@@ -384,7 +378,6 @@ rvm_uvm_object_unavailable(void)
 }
 
 void holdrelel(struct vnode *vnode __unused) { panic(rvm_no_object); }
-void wakeup(wchan_t channel __unused) { panic(rvm_no_sleep); }
 
 krwlock_t *rw_obj_alloc(void) { panic(rvm_no_sleep); }
 bool rw_obj_free(krwlock_t *lock __unused) { panic(rvm_no_sleep); }
@@ -398,6 +391,7 @@ void vholdl(struct vnode *vnode __unused) { panic(rvm_no_object); }
 void
 kpreempt_disable(void)
 {
+	unsigned int guard = rvm_intr_suspend();
 	check_mode();
 	if (curlwp == NULL || curlwp != curcpu()->ci_onproc || curlwp->l_cpu != curcpu() ||
 	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_nopreempt < 0 ||
@@ -405,17 +399,20 @@ kpreempt_disable(void)
 		panic(rvm_bad_lock);
 	curlwp->l_nopreempt++;
 	__asm volatile("" ::: "memory");
+	rvm_intr_resume(guard);
 }
 
 void
 kpreempt_enable(void)
 {
+	unsigned int guard = rvm_intr_suspend();
 	check_mode();
 	if (curlwp == NULL || curlwp != curcpu()->ci_onproc || curlwp->l_cpu != curcpu() ||
 	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_nopreempt <= 0 || curlwp->l_dopreempt)
 		panic(rvm_bad_lock);
 	__asm volatile("" ::: "memory");
 	curlwp->l_nopreempt--;
+	rvm_intr_resume(guard);
 }
 
 /* No daemon runs, so its progress generation remains zero. Wired NOWAIT km
@@ -492,11 +489,15 @@ atomic_cas_ptr(volatile void *address, void *expected, void *replacement)
 void
 membar_release(void)
 {
-	check_mode();
+	uint64_t cr = rvm_boot_get_cr();
+	/* UP and uncached execution need a compiler fence even when IRQs can
+	 * interrupt the reader. Do not mask here: MI generation retries handle
+	 * an interrupt or preemption between a barrier and the next load. */
+	if (cr != RVM_CR_MMU && cr != (RVM_CR_MMU | RVM_CR_INTERRUPT)) panic(rvm_bad_lock);
 	__asm volatile("" ::: "memory");
 }
 
-/* One CPU, caches disabled, and IRQ entry masks CR before reaching C. */
+/* One CPU and caches disabled; valid on both sides of IRQ entry. */
 void membar_producer(void) { membar_release(); }
 void membar_consumer(void) { membar_release(); }
 
@@ -519,14 +520,19 @@ atomic_add_int(volatile unsigned int *value, int delta)
 	*value += delta;
 }
 
-/* An IRQ-off bootstrap checkpoint cannot switch to another LWP. */
+/* A guarded allocator checkpoint defers scheduling until the outer boundary. */
 void
 preempt_point(void)
 {
-	check_mode();
+	unsigned int guard = rvm_intr_suspend();
 	if (curlwp == NULL || curlwp != curcpu()->ci_onproc || curlwp->l_cpu != curcpu() ||
-	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_nopreempt != 0 ||
-	    curlwp->l_dopreempt || curcpu()->ci_want_resched)
+	    !(curlwp->l_flag & LW_SYSTEM)) panic(rvm_no_sleep);
+	if (rvm_async_clock_active()) {
+		if (guard == 0 && curcpu()->ci_cpl == IPL_NONE && curcpu()->ci_irq_locks == 0 &&
+		    curlwp->l_nopreempt == 0 && !cpu_intr_p()) rvm_bootsched_preempt();
+	} else if (curlwp->l_nopreempt != 0 || curlwp->l_dopreempt || curcpu()->ci_want_resched) {
 		panic(rvm_no_sleep);
+	}
 	__asm volatile("" ::: "memory");
+	rvm_intr_resume(guard);
 }

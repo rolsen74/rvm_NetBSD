@@ -1,4 +1,4 @@
-/* MI hardclock adapter. Counters reflect serviced waits, not busy wall time. */
+/* MI hardclock adapter. Uptime uses the independent GenericDriver counter. */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -13,6 +13,7 @@
 #include <machine/irq.h>
 #include <machine/bootclock.h>
 #include <machine/boottime.h>
+#include <machine/clock.h>
 #include <machine/bootsched.h>
 
 static unsigned int initialized __attribute__((section(".data"))) = 0;
@@ -97,9 +98,10 @@ rvm_timecounter_verify(void)
 	struct timeval tv;
 	if (!rvm_timecounter_init()) return 0;
 	binuptime(&before);
-	if (before.sec < 1 || tc_getfrequency() != RVM_CLOCK_HZ || !rvm_clock_start()) return 0;
+	if (before.sec < 1 || tc_getfrequency() != RVM_TIMECOUNTER_FREQUENCY || !rvm_clock_start()) return 0;
 	if (!rvm_clock_wait() || !rvm_clock_wait() || !rvm_clock_stop()) return 0;
 	binuptime(&after); nanouptime(&ts); microuptime(&tv);
-	return bintimecmp(&after, &before, >) && ts.tv_sec == after.sec &&
-	    tv.tv_sec == after.sec && ts.tv_nsec / 1000 == tv.tv_usec;
+	return bintimecmp(&after, &before, >) && ts.tv_sec >= after.sec &&
+	    tv.tv_sec >= ts.tv_sec && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000 &&
+	    tv.tv_usec >= 0 && tv.tv_usec < 1000000;
 }

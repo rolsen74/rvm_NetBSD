@@ -9,7 +9,7 @@
 #endif
 
 struct kmutex {
-	uintptr_t mtx_state;
+	uintptr_t mtx_state; /* 0: free; adaptive: owner LWP; spin: 1 */
 	unsigned int mtx_magic;
 	int mtx_ipl;
 	int mtx_oldipl;

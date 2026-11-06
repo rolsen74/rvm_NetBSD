@@ -11,6 +11,7 @@
 #include <machine/pcb.h>
 #include <machine/switch.h>
 #include <machine/uarea.h>
+#include <machine/bootwait.h>
 
 const char rvm_lwp_bad[] = "Invalid RVM kernel LWP lifecycle";
 
@@ -53,6 +54,7 @@ cpu_lwp_free2(struct lwp *l)
 	    (l->l_stat != LSZOMB && l->l_stat != LSIDL) || l->l_addr == NULL ||
 	    l->l_md.md_pcb != l->l_addr)
 		panic(rvm_lwp_bad);
+	rvm_wait_lwp_fini(l);
 	if (!rvm_uarea_unbind(l)) panic(rvm_lwp_bad);
 	memset(&l->l_md, 0, sizeof(l->l_md));
 	/* Do not clear l_addr: uvm_lwp_exit() needs it to free the u-area. */
