@@ -1,7 +1,7 @@
 /*
  * Standalone UVM harness. Physical preload and raw-page initialization use
  * real MI code. Full kernel builds must use their MI globals and services
- * instead of this file. VM maps, objects and kernel main() remain pending.
+ * instead of this file. Object pagers, full UVM km and main() remain pending.
  */
 #include <sys/param.h>
 #include <sys/extent.h>
@@ -132,6 +132,7 @@ rvm_uvm_bootstrap(void)
 
 	if (!rvm_bootmem.sealed || rvm_uvm_boot.registered ||
 	    uvm.page_init_done || rvm_bootmem.free_start >= rvm_bootmem.free_end ||
+	    rvm_bootmem.free_end - rvm_bootmem.free_start < 4 * PAGE_SIZE ||
 	    ((rvm_bootmem.free_start | rvm_bootmem.free_end) & PAGE_MASK) != 0)
 		return 0;
 	rvm_uvm_cpuinit();

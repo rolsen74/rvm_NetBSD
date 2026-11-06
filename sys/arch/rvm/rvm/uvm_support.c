@@ -1,6 +1,6 @@
 /*
- * Services for the standalone MI page allocator. One CPU, CR == MMU only:
- * mutexes and logical IPLs have real state, but may never sleep or contend.
+ * Services for standalone MI pages and maps. One CPU, CR == MMU only:
+ * mutexes, rwlocks and logical IPLs have state but may not sleep or contend.
  * Full kernels must replace this file with NetBSD's normal kernel services.
  */
 #include <sys/param.h>
@@ -13,6 +13,8 @@
 #include <machine/boot.h>
 #include <machine/pmap.h>
 #include <machine/psl.h>
+#include <machine/bootobject.h>
+#include <machine/bootalloc.h>
 
 #define BOOT_MUTEX_MAGIC 0x52564d4cU
 struct cpu_info cpu_info_primary __attribute__((section(".data"))) = { 0 };
@@ -24,6 +26,7 @@ const char rvm_bad_lock[] = "Invalid bootstrap lock/IPL operation";
 const char rvm_no_object[] = "Object/anonymous page services are not available";
 const char rvm_no_sleep[] = "Sleeping or dynamic kernel allocation is not available";
 const char rvm_bad_page[] = "Invalid raw UVM page operation";
+const char rvm_abort[] = "Unexpected early kernel abort";
 
 /* Actual MI bodies, renamed only in the standalone compilation profile. */
 struct vm_page *rvm_mi_pagealloc_strat(struct uvm_object *, voff_t,
@@ -34,11 +37,17 @@ struct vm_page *
 uvm_pagealloc_strat(struct uvm_object *obj, voff_t offset, struct vm_anon *anon,
     int flags, int strategy, int freelist)
 {
-	if (obj != NULL || anon != NULL)
+	if (anon != NULL || (obj != NULL && !rvm_bootobj_valid(obj)))
 		panic(rvm_no_object);
-	if (offset != 0 || strategy != UVM_PGA_STRAT_NORMAL ||
+	if ((obj == NULL && (offset < 0 || (offset & PAGE_MASK) != 0 ||
+	    (offset != 0 && !(flags & UVM_FLAG_COLORMATCH)) ||
+	    (u_long)offset >= RVM_BOOTALLOC_SIZE)) ||
+	    (obj != NULL && (!rvm_bootobj_offset(obj, offset) ||
+	    (flags & UVM_FLAG_COLORMATCH) ||
+	    !rw_write_held(obj->vmobjlock) || uvm_pagelookup(obj, offset) != NULL)) ||
+	    strategy != UVM_PGA_STRAT_NORMAL ||
 	    freelist != VM_FREELIST_DEFAULT ||
-	    (flags & ~(UVM_PGA_ZERO | UVM_PGA_USERESERVE)) != 0)
+	    (flags & ~(UVM_PGA_ZERO | UVM_PGA_USERESERVE | UVM_FLAG_COLORMATCH)) != 0)
 		panic(rvm_bad_page);
 	return rvm_mi_pagealloc_strat(obj, offset, anon, flags, strategy, freelist);
 }
@@ -46,8 +55,11 @@ uvm_pagealloc_strat(struct uvm_object *obj, voff_t offset, struct vm_anon *anon,
 void
 uvm_pagefree(struct vm_page *page)
 {
-	if (page == NULL || (page->flags & PG_FREE) != 0 || page->uobject != NULL ||
-	    page->uanon != NULL || page->loan_count != 0 || page->wire_count != 0 ||
+	if (page == NULL || (page->flags & PG_FREE) != 0 ||
+	    page->uanon != NULL || page->loan_count != 0 ||
+	    (page->uobject == NULL && page->wire_count != 0) ||
+	    (page->uobject != NULL && (!rvm_bootobj_valid(page->uobject) ||
+	    !rw_write_held(page->uobject->vmobjlock))) ||
 	    (uvm.page_init_done && PHYS_TO_VM_PAGE(VM_PAGE_TO_PHYS(page)) != page))
 		panic(rvm_bad_page);
 	rvm_mi_pagefree(page);
@@ -137,6 +149,36 @@ mutex_exit(kmutex_t *lock)
 void mutex_spin_enter(kmutex_t *lock) { mutex_enter(lock); }
 void mutex_spin_exit(kmutex_t *lock) { mutex_exit(lock); }
 
+int
+mutex_tryenter(kmutex_t *lock)
+{
+	check_mode();
+	if (lock->mtx_magic != BOOT_MUTEX_MAGIC)
+		panic(rvm_bad_lock);
+	if (lock->mtx_state != 0)
+		return 0;
+	mutex_enter(lock);
+	return 1;
+}
+
+int
+mutex_owned(const kmutex_t *lock)
+{
+	check_mode();
+	if (lock->mtx_magic != BOOT_MUTEX_MAGIC)
+		panic(rvm_bad_lock);
+	return lock->mtx_state == 1;
+}
+
+void
+mutex_destroy(kmutex_t *lock)
+{
+	check_mode();
+	if (lock->mtx_magic != BOOT_MUTEX_MAGIC || lock->mtx_state != 0)
+		panic(rvm_bad_lock);
+	lock->mtx_magic = 0;
+}
+
 void
 cv_init(kcondvar_t *cv, const char *name)
 {
@@ -158,12 +200,32 @@ void cv_wait(kcondvar_t *cv __unused, kmutex_t *lock __unused)
 int cv_wait_sig(kcondvar_t *cv __unused, kmutex_t *lock __unused)
 { panic(rvm_no_sleep); }
 
-void *kmem_alloc(size_t size __unused, km_flag_t flags __unused)
-{ panic(rvm_no_sleep); }
-void *pool_get(struct pool *pool __unused, int flags __unused)
-{ panic(rvm_no_sleep); }
-void pool_put(struct pool *pool __unused, void *item __unused)
-{ panic(rvm_no_sleep); }
+
+void
+cv_destroy(kcondvar_t *cv)
+{
+	check_mode();
+	if (cv->cv_opaque[1] != NULL)
+		panic(rvm_no_sleep);
+	cv->cv_opaque[0] = NULL;
+}
+
+int kpause(const char *message __unused, bool intr __unused,
+    int ticks __unused, kmutex_t *lock __unused) { panic(rvm_no_sleep); }
+
+size_t
+strlcpy(char *to, const char *from, size_t size)
+{
+	size_t n = 0;
+	while (from[n] != '\0') {
+		if (n + 1 < size)
+			to[n] = from[n];
+		n++;
+	}
+	if (size != 0)
+		to[n < size ? n : size - 1] = '\0';
+	return n;
+}
 
 void
 cpu_count(enum cpu_count which, int64_t delta)
@@ -181,6 +243,113 @@ atomic_dec_uint(volatile unsigned int *value)
 	/* Interrupts remain disabled for the entire single-CPU bootstrap. */
 	--*value;
 }
+
+void
+atomic_inc_uint(volatile unsigned int *value)
+{
+	check_mode();
+	++*value;
+}
+
+/* Public rwlock storage, checked for the same UP/IRQ-off bootstrap mode.
+ * The upper bits identify initialized locks; low bits encode shared readers
+ * or one writer. No contention, waiters or scheduler operations are possible.
+ */
+#define BOOT_RW_MAGIC 0x52564d5200000000UL
+#define BOOT_RW_WRITER 0x80000000UL
+#define BOOT_RW_READERS 0x7fffffffUL
+
+static uintptr_t
+rw_state(krwlock_t *lock)
+{
+	check_mode();
+	if ((lock->rw_owner & ~0xffffffffUL) != BOOT_RW_MAGIC)
+		panic(rvm_bad_lock);
+	return lock->rw_owner & 0xffffffffUL;
+}
+
+void rw_init(krwlock_t *lock)
+{ check_mode(); lock->rw_owner = BOOT_RW_MAGIC; }
+
+int
+rw_tryenter(krwlock_t *lock, const krw_t op)
+{
+	uintptr_t state = rw_state(lock);
+
+	if (op != RW_READER && op != RW_WRITER)
+		panic(rvm_bad_lock);
+	if (op == RW_WRITER) {
+		if (state != 0)
+			return 0;
+		lock->rw_owner |= BOOT_RW_WRITER;
+	} else {
+		if (state & BOOT_RW_WRITER)
+			return 0;
+		if (state == BOOT_RW_READERS)
+			panic(rvm_bad_lock);
+		lock->rw_owner++;
+	}
+	return 1;
+}
+
+void rw_enter(krwlock_t *lock, const krw_t op)
+{ if (!rw_tryenter(lock, op)) panic(rvm_bad_lock); }
+
+void
+rw_exit(krwlock_t *lock)
+{
+	uintptr_t state = rw_state(lock);
+
+	if (state == BOOT_RW_WRITER)
+		lock->rw_owner = BOOT_RW_MAGIC;
+	else if (state != 0 && !(state & BOOT_RW_WRITER))
+		lock->rw_owner--;
+	else
+		panic(rvm_bad_lock);
+}
+
+int rw_read_held(krwlock_t *lock)
+{ uintptr_t s = rw_state(lock); return s != 0 && !(s & BOOT_RW_WRITER); }
+int rw_write_held(krwlock_t *lock)
+{ return rw_state(lock) == BOOT_RW_WRITER; }
+int rw_lock_held(krwlock_t *lock) { return rw_state(lock) != 0; }
+
+void *
+memcpy(void *destination, const void *source, size_t size)
+{
+	unsigned char *to = destination;
+	const unsigned char *from = source;
+
+	while (size-- != 0)
+		*to++ = *from++;
+	return destination;
+}
+
+void *
+memset(void *destination, int value, size_t size)
+{
+	unsigned char *to = destination;
+
+	while (size-- != 0)
+		*to++ = value;
+	return destination;
+}
+
+int hz __attribute__((section(".data"))) = 100;
+int cv_timedwait(kcondvar_t *cv __unused, kmutex_t *lock __unused,
+    int ticks __unused) { panic(rvm_no_sleep); }
+void abort(void) { panic(rvm_abort); }
+
+struct vm_amap *amap_alloc(vaddr_t size __unused, vaddr_t pad __unused,
+    int flags __unused) { panic(rvm_no_object); }
+int amap_extend(struct vm_map_entry *entry __unused, vsize_t size __unused,
+    int flags __unused) { panic(rvm_no_object); }
+void amap_splitref(struct vm_aref *a __unused, struct vm_aref *b __unused,
+    vaddr_t offset __unused) { panic(rvm_no_object); }
+void amap_unref(struct vm_amap *amap __unused, vaddr_t offset __unused,
+    vsize_t size __unused, bool all __unused) { panic(rvm_no_object); }
+void uvm_fault_unwire_locked(struct vm_map *map __unused,
+    vaddr_t start __unused, vaddr_t end __unused) { panic(rvm_no_object); }
 
 #undef bzero
 void
@@ -205,12 +374,67 @@ rvm_uvm_object_unavailable(void)
 	panic(rvm_no_object);
 }
 
-void *radix_tree_remove_node(struct radix_tree *tree __unused,
-    uint64_t index __unused)
-{ panic(rvm_no_object); }
 void holdrelel(struct vnode *vnode __unused) { panic(rvm_no_object); }
-unsigned int uvm_pagegetdirty(struct vm_page *pg __unused)
-{ panic(rvm_no_object); }
-void uvm_pagemarkdirty(struct vm_page *pg __unused, unsigned int status __unused)
-{ panic(rvm_no_object); }
 void wakeup(wchan_t channel __unused) { panic(rvm_no_sleep); }
+
+krwlock_t *rw_obj_alloc(void) { panic(rvm_no_sleep); }
+bool rw_obj_free(krwlock_t *lock __unused) { panic(rvm_no_sleep); }
+void ubc_purge(struct uvm_object *obj)
+{
+	if (!LIST_EMPTY(&obj->uo_ubc))
+		panic(rvm_no_object);
+}
+bool pmap_clear_modify(struct vm_page *page __unused) { panic(rvm_no_object); }
+void vholdl(struct vnode *vnode __unused) { panic(rvm_no_object); }
+void kpreempt_disable(void) { panic(rvm_no_sleep); }
+void kpreempt_enable(void) { panic(rvm_no_sleep); }
+
+/* No daemon runs, so its progress generation remains zero. Wired NOWAIT km
+ * allocation reads a ticket but never waits or asks whether reclaim can run.
+ */
+uint64_t uvm_wait_prepare(void) { check_mode(); return 0; }
+void uvm_wait(const char *name __unused, uint64_t ticket __unused)
+{ panic(rvm_no_sleep); }
+bool uvm_reclaimable(void) { panic(rvm_no_sleep); }
+void uvm_pagewait(struct vm_page *page __unused, krwlock_t *lock __unused,
+    const char *message __unused) { panic(rvm_no_sleep); }
+
+/* Pool-only bootstrap services; no clock ticks or passive serialization. */
+int cold __attribute__((section(".data"))) = 1;
+volatile time_t time__uptime __attribute__((section(".data"))) = 0;
+unsigned int
+atomic_inc_uint_nv(volatile unsigned int *value)
+{
+	check_mode();
+	return ++*value;
+}
+
+int
+ffs(int value)
+{
+	unsigned int bits = (unsigned int)value;
+	int position = 1;
+	if (bits == 0)
+		return 0;
+	while (!(bits & 1)) {
+		bits >>= 1;
+		position++;
+	}
+	return position;
+}
+
+int
+strcmp(const char *a, const char *b)
+{
+	while (*a != '\0' && *a == *b) {
+		a++;
+		b++;
+	}
+	return (unsigned char)*a - (unsigned char)*b;
+}
+
+int ratecheck(struct timeval *last __unused, const struct timeval *rate __unused)
+{ panic(rvm_no_sleep); }
+void log(int level __unused, const char *message __unused, ...)
+{ panic(rvm_no_sleep); }
+void xc_barrier(unsigned int flags __unused) { panic(rvm_no_sleep); }

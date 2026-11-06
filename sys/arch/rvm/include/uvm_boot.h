@@ -18,6 +18,7 @@ struct rvm_uvm_boot_state {
 extern struct rvm_uvm_boot_state rvm_uvm_boot;
 int rvm_uvm_bootstrap(void);
 int rvm_uvm_pageinit(void);
+int rvm_uvm_km_verify(void);
 void rvm_uvm_cpuinit(void);
 
 #endif /* _RVM_UVM_BOOT_H_ */

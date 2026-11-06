@@ -14,12 +14,14 @@ BOOT_CFLAGS := -std=gnu11 -O2 -ffreestanding -fno-builtin \
 HEADER_FLAGS := -D_KERNEL -I$(OBJDIR)/include -I$(SRC_TOP)/sys -I$(SRC_TOP)/common/include
 HEADERS := $(wildcard $(RVM_DIR)/include/*.h)
 BOOT_SOURCES := $(wildcard $(RVM_DIR)/stand/boot/*.vma $(RVM_DIR)/stand/boot/includes_i/*.i)
-BOOT_OPTIONS := $(addprefix $(OBJDIR)/include/,opt_ddb.h opt_uvm.h opt_uvmhist.h opt_readahead.h opt_multiprocessor.h)
-MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache
+BOOT_OPTIONS := $(addprefix $(OBJDIR)/include/,opt_ddb.h opt_uvm.h opt_uvmhist.h opt_readahead.h opt_multiprocessor.h opt_pax.h opt_sysv.h opt_user_va0_disable_default.h opt_kmempages.h)
+MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache uvm_map rbtree uvm_object uvm_page_status radixtree uvm_km vmem pool
 MI_OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MI_NAMES)))
 BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
 	$(OBJDIR)/bootmem.o $(OBJDIR)/pmap.o $(OBJDIR)/uvm_machdep.o \
-	$(OBJDIR)/uvm_bootstrap.o $(OBJDIR)/uvm_support.o $(MI_OBJS)
+	$(OBJDIR)/uvm_bootstrap.o $(OBJDIR)/uvm_support.o $(OBJDIR)/bootalloc.o \
+	$(OBJDIR)/bootmap.o $(OBJDIR)/bootobject.o $(OBJDIR)/bootkm.o \
+	$(OBJDIR)/bootheap.o $(OBJDIR)/bootpool.o $(MI_OBJS)
 
 .PHONY: all check clean run test
 .DELETE_ON_ERROR:
@@ -36,6 +38,7 @@ $(OBJDIR)/abi-check.o: $(RVM_DIR)/rvm/abi-check.c $(HEADERS) $(RVM_DIR)/Makefile
 	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -c "$<" -o "$@"
 
 check: $(OBJDIR)/abi-check.o
+	python3 "$(RVM_DIR)/stand/compiler_check.py" --cc "$(RVM_CC)"
 
 $(OBJDIR)/machdep.o: $(RVM_DIR)/rvm/machdep.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -c "$<" -o "$@"
@@ -58,6 +61,24 @@ $(OBJDIR)/uvm_bootstrap.o: $(RVM_DIR)/rvm/uvm_bootstrap.c $(HEADERS) $(RVM_DIR)/
 $(OBJDIR)/uvm_support.o: $(RVM_DIR)/rvm/uvm_support.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
 
+$(OBJDIR)/bootalloc.o: $(RVM_DIR)/rvm/bootalloc.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootmap.o: $(RVM_DIR)/rvm/bootmap.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootobject.o: $(RVM_DIR)/rvm/bootobject.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootkm.o: $(RVM_DIR)/rvm/bootkm.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootheap.o: $(RVM_DIR)/rvm/bootheap.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/bootpool.o: $(RVM_DIR)/rvm/bootpool.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -O1 -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
+
 $(BOOT_OPTIONS): | $(OBJDIR)/include/machine
 	printf '%s\n' '/* Standalone UP bootstrap: option disabled. */' > "$@"
 
@@ -67,8 +88,8 @@ $(BOOT_OPTIONS): | $(OBJDIR)/include/machine
 MI_CFLAGS := -DNO_KERNEL_RCSIDS -Wno-unused-parameter -Wno-sign-compare -Wno-pointer-sign
 define MI_OBJECT
 $(OBJDIR)/$(1).o: $(SRC_TOP)/$(2) $(RVM_DIR)/stand/fhr_asm.py $(RVM_DIR)/stand/uvm_profile.h $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
-	$(RVM_CC) $(BOOT_CFLAGS) $(MI_CFLAGS) $(HEADER_FLAGS) $(if $(3),-fwhole-program -DRVM_BOOT_$(3) -include "$(RVM_DIR)/stand/uvm_profile.h") -MF "$(OBJDIR)/$(1).d" -MT "$$@" -S "$$<" -o "$(OBJDIR)/$(1).raw.s"
-	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/$(1).raw.s" "$(OBJDIR)/$(1).s"
+	$(RVM_CC) $(BOOT_CFLAGS) $(4) $(MI_CFLAGS) $(HEADER_FLAGS) $(if $(3),-fwhole-program -DRVM_BOOT_$(3) -include "$(RVM_DIR)/stand/uvm_profile.h") -MF "$(OBJDIR)/$(1).d" -MT "$$@" -S "$$<" -o "$(OBJDIR)/$(1).raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/$(1).raw.s" "$(OBJDIR)/$(1).s" --cc "$(RVM_CC)"
 	$(RVM_CC) -c "$(OBJDIR)/$(1).s" -o "$$@"
 endef
 $(eval $(call MI_OBJECT,uvm_physseg,sys/uvm/uvm_physseg.c,))
@@ -77,6 +98,23 @@ $(eval $(call MI_OBJECT,uvm_extent,sys/kern/subr_extent.c,EXTENT))
 $(eval $(call MI_OBJECT,uvm_clock,sys/uvm/uvm_pdpolicy_clock.c,CLOCK))
 $(eval $(call MI_OBJECT,uvm_meter,sys/uvm/uvm_meter.c,METER))
 $(eval $(call MI_OBJECT,uvm_pgflcache,sys/uvm/uvm_pgflcache.c,))
+$(eval $(call MI_OBJECT,rbtree,common/lib/libc/gen/rbtree.c,))
+$(eval $(call MI_OBJECT,uvm_object,sys/uvm/uvm_object.c,OBJECT))
+$(eval $(call MI_OBJECT,uvm_page_status,sys/uvm/uvm_page_status.c,STATUS))
+$(eval $(call MI_OBJECT,radixtree,common/lib/libc/gen/radixtree.c,RADIX))
+$(eval $(call MI_OBJECT,uvm_km,sys/uvm/uvm_km.c,KM))
+$(eval $(call MI_OBJECT,vmem,sys/arch/rvm/stand/vmem.c,VMEM))
+$(OBJDIR)/vmem.o: $(SRC_TOP)/sys/kern/subr_vmem.c
+# GCC combine currently ICEs on the two pool units at -O2; use -O1 there.
+$(eval $(call MI_OBJECT,pool,sys/arch/rvm/stand/pool.c,POOL,-O1))
+$(OBJDIR)/pool.o: $(SRC_TOP)/sys/kern/subr_pool.c
+
+# Runtime callback initialization works around FHR static function pointers.
+$(OBJDIR)/uvm_map.o: $(SRC_TOP)/sys/uvm/uvm_map.c $(RVM_DIR)/stand/map_source.py $(RVM_DIR)/stand/uvm_profile.h $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
+	python3 "$(RVM_DIR)/stand/map_source.py" "$<" "$(OBJDIR)/uvm_map.c"
+	$(RVM_CC) $(BOOT_CFLAGS) $(MI_CFLAGS) $(HEADER_FLAGS) -fwhole-program -DRVM_BOOT_MAP -include "$(RVM_DIR)/stand/uvm_profile.h" -MF "$(OBJDIR)/uvm_map.d" -MT "$@" -S "$(OBJDIR)/uvm_map.c" -o "$(OBJDIR)/uvm_map.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/uvm_map.raw.s" "$(OBJDIR)/uvm_map.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/uvm_map.s" -o "$@"
 
 $(OBJDIR)/locore.o: $(RVM_DIR)/rvm/locore.S $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/locore.vma"
@@ -84,6 +122,8 @@ $(OBJDIR)/locore.o: $(RVM_DIR)/rvm/locore.S $(HEADERS) $(RVM_DIR)/Makefile.boots
 
 $(OBJDIR)/netbsd.fhr: $(BOOT_OBJS) $(RVM_DIR)/Makefile.bootstrap
 	$(RVM_LD) -e _start -Map "$(OBJDIR)/netbsd.map" -o "$@" $(BOOT_OBJS)
+
+$(OBJDIR)/netbsd.fhr: | check
 
 $(OBJDIR)/bootloader.bin: $(BOOT_SOURCES) $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$(RVM_DIR)/stand/boot/Source.vma" -o "$(OBJDIR)/bootloader.vma"
@@ -108,7 +148,13 @@ clean:
 	    "$(OBJDIR)/uvm_physseg.o" "$(OBJDIR)/uvm_physseg.raw.s" "$(OBJDIR)/uvm_physseg.s" \
 	    "$(OBJDIR)/netbsd.fhr" "$(OBJDIR)/netbsd.map" \
 	    "$(OBJDIR)/bootloader.bin" "$(OBJDIR)/vm.config" "$(OBJDIR)/locore.vma"
-	rm -f $(MI_OBJS) $(MI_OBJS:.o=.raw.s) $(MI_OBJS:.o=.s) "$(OBJDIR)/uvm_support.o"
+	rm -f $(MI_OBJS) $(MI_OBJS:.o=.raw.s) $(MI_OBJS:.o=.s) "$(OBJDIR)/uvm_support.o" "$(OBJDIR)/bootalloc.o"
 	rm -f $(BOOT_OBJS:.o=.d) "$(OBJDIR)/abi-check.d"
+	rm -f "$(OBJDIR)/uvm_map.c"
+	rm -f "$(OBJDIR)/bootmap.o"
+	rm -f "$(OBJDIR)/bootobject.o"
+	rm -f "$(OBJDIR)/bootkm.o"
+	rm -f "$(OBJDIR)/bootheap.o"
+	rm -f "$(OBJDIR)/bootpool.o"
 
 -include $(wildcard $(OBJDIR)/*.d)

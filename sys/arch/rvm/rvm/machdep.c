@@ -1,4 +1,4 @@
-/* NetBSD/RVM startup with managed UVM raw pages; VM maps/main() are pending. */
+/* NetBSD/RVM startup with managed pages and a VA map; full UVM/main pending. */
 #include <machine/boot.h>
 #include <machine/psl.h>
 #include <machine/bootmem.h>
@@ -6,9 +6,13 @@
 #include <machine/pmap.h>
 #include <machine/vmparam.h>
 #include <machine/uvm_boot.h>
+#include <machine/bootalloc.h>
+#include <machine/bootheap.h>
+#include <machine/bootpool.h>
 #include <machine/generic.h>
 
-/* 1: C, 2: console, 3: memory, 4: pmap, 5: MMU, 6/7: verified, 8/9: UVM. */
+/* 1: C, 2: console, 3: memory, 4: pmap, 5: MMU, 6/7: verified, 8/9: UVM,
+ * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools. */
 volatile unsigned long rvm_boot_stage
     __attribute__((section(".data"))) = 0;
 static volatile unsigned int rvm_boot_fault_active
@@ -38,6 +42,22 @@ const char rvm_msg_uvmready[] =
 const char rvm_msg_managed[] = "UVM managed pages: 0x";
 const char rvm_msg_pageinit[] =
     "\nUVM page allocator ready; allocation/free verified.\n";
+const char rvm_msg_wired[] =
+    "Early wired allocator ready; zeroed allocation/free verified.\n";
+const char rvm_msg_map[] =
+    "UVM kernel VA map ready; reservations and wired buffers verified.\n";
+const char rvm_msg_objects[] =
+    "UVM resident objects ready; page ownership and wired allocation verified.\n";
+const char rvm_msg_km[] =
+    "UVM kernel allocator ready; wired and VA-only allocation/free verified.\n";
+const char rvm_msg_badkm[] = "UVM kernel allocation verification failed.\n";
+const char rvm_msg_heap[] =
+    "Bootstrap kmem heap ready; subpage allocation and span release verified.\n";
+const char rvm_msg_badheap[] = "Bootstrap heap verification failed.\n";
+const char rvm_msg_pool[] =
+    "Bootstrap MI pools ready; item allocation and page release verified.\n";
+const char rvm_msg_badpool[] = "Bootstrap pool verification failed.\n";
+const char rvm_msg_badwired[] = "Early wired allocator verification failed.\n";
 const char rvm_msg_ram[] = "RAM end: 0x";
 const char rvm_msg_reserved[] = "\nReserved prefix end: 0x";
 const char rvm_msg_root[] = "\nSupervisor MMU root: 0x";
@@ -87,6 +107,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	volatile uint64_t *alias;
 	volatile uint64_t *physical;
 	paddr_t pa;
+	vaddr_t buffer;
 
 	rvm_boot_stage = 1;
 	rvm_early_consinit();
@@ -176,6 +197,53 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	rvm_early_puts(rvm_msg_managed);
 	rvm_early_puthex(rvm_uvm_boot.managed_pages);
 	rvm_early_puts(rvm_msg_pageinit);
+	/* Two pages exercise the object's radix-tree node allocation too. */
+	if (!rvm_bootalloc_init()) {
+		rvm_early_puts(rvm_msg_badwired);
+		rvm_boot_stop();
+	}
+	buffer = rvm_bootalloc(RVM_MMU_PAGE_SIZE + 1);
+	if (buffer == 0) {
+		rvm_early_puts(rvm_msg_badwired);
+		rvm_boot_stop();
+	}
+	alias = (volatile uint64_t *)buffer;
+	if (alias[0] != 0 || alias[2 * RVM_MMU_PAGE_SIZE / sizeof(*alias) - 1] != 0) {
+		rvm_early_puts(rvm_msg_badwired);
+		rvm_boot_stop();
+	}
+	alias[0] = 0x52564d5749524544UL;
+	alias[2 * RVM_MMU_PAGE_SIZE / sizeof(*alias) - 1] = ~alias[0];
+	if (alias[0] != 0x52564d5749524544UL ||
+	    alias[2 * RVM_MMU_PAGE_SIZE / sizeof(*alias) - 1] != ~alias[0] ||
+	    !rvm_bootfree(buffer)) {
+		rvm_early_puts(rvm_msg_badwired);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 10;
+	rvm_early_puts(rvm_msg_wired);
+	rvm_boot_stage = 11;
+	rvm_early_puts(rvm_msg_map);
+	rvm_boot_stage = 12;
+	rvm_early_puts(rvm_msg_objects);
+	if (!rvm_uvm_km_verify()) {
+		rvm_early_puts(rvm_msg_badkm);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 13;
+	rvm_early_puts(rvm_msg_km);
+	if (!rvm_bootheap_verify()) {
+		rvm_early_puts(rvm_msg_badheap);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 14;
+	rvm_early_puts(rvm_msg_heap);
+	if (!rvm_bootpool_verify()) {
+		rvm_early_puts(rvm_msg_badpool);
+		rvm_boot_stop();
+	}
+	rvm_boot_stage = 15;
+	rvm_early_puts(rvm_msg_pool);
 }
 
 void
