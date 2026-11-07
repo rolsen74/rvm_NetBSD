@@ -1,0 +1,27 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -901,6 +901,13 @@
+ 
+ /* Initialize the GCC target structure.  */
+ 
++/* RVM permits unaligned 64-bit data and has eight-byte FHR relocations. */
++#undef TARGET_ASM_ALIGNED_DI_OP
++#define TARGET_ASM_ALIGNED_DI_OP "\t.quad\t"
++#undef TARGET_ASM_UNALIGNED_DI_OP
++#define TARGET_ASM_UNALIGNED_DI_OP "\t.quad\t"
++
++
+ #undef TARGET_PROMOTE_PROTOTYPES
+ #define TARGET_PROMOTE_PROTOTYPES hook_bool_const_tree_true
+ 
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -275,7 +275,7 @@
+ /* Assembler Commands for Alignment */
+ 
+ #define ASM_OUTPUT_ALIGN(STREAM,POWER) \
+-	do { (void) (STREAM); (void) (POWER); } while (0)
++	fprintf ((STREAM), "\t.balign %llu\n", 1ULL << (POWER))
+ 
+ /* Output and Generation of Labels */
+ 

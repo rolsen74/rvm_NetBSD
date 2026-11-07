@@ -15,6 +15,7 @@
 #include <sys/cpu_data.h>
 
 struct lwp;
+struct proc;
 struct trapframe;
 
 /*
@@ -34,8 +35,10 @@ struct clockframe
 
 struct cpu_info
 {
-	struct cpu_data		  ci_data;	 /* NetBSD machine-independent CPU state */
 	struct lwp *		  ci_curlwp; /* current lightweight process */
+	struct cpu_data		  ci_data;	 /* NetBSD machine-independent CPU state */
+	cpuid_t ci_cpuid;
+	device_t ci_dev;
 	struct lwp *		  ci_onproc; /* currently running LWP */
 	volatile unsigned int ci_intr_depth;
 	int					  ci_cpl; /* current interrupt priority */
@@ -56,6 +59,8 @@ struct cpu_info
  */
 extern struct cpu_info cpu_info_primary;
 void cpu_signotify(struct lwp *);
+void cpu_need_proftick(struct lwp *);
+void cpu_proc_fork(struct proc *, struct proc *);
 void *cpu_uarea_alloc(bool);
 bool cpu_uarea_free(void *);
 

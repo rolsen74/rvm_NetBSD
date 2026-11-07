@@ -16,8 +16,20 @@
 #include <sys/featuretest.h>
 #include <machine/int_types.h>
 
+#ifndef RVM_KERNEL
 #define __HAVE_CPU_UAREA_ROUTINES 1
+#endif
 #define __HAVE_VM_PAGE_MD 1
+
+/* RVM's LP64 ABI aligns long/pointer objects to four bytes. On the current
+ * uncached UP CPU a scalar load/store is one instruction even at this ABI
+ * alignment; interrupts/context switches occur only between instructions.
+ * Keep MI alignment checks at the type's native requirement. SMP/cache
+ * support must revisit this guarantee together with the atomic primitives.
+ */
+#ifdef _KERNEL
+#define __ATOMIC_ALIGNMENT(p) __alignof__(*(p))
+#endif
 
 /*
  * RVM currently targets a 64-bit LP64 ABI.

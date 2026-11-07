@@ -18,6 +18,7 @@ _BSD_ENDIAN_MK_=1
     ${MACHINE_ARCH:C/^.*el$/el/} == "el"
 TARGET_ENDIANNESS=	1234
 .elif ${MACHINE_ARCH} == "coldfire" || \
+      ${MACHINE_ARCH} == "rvm64" || \
       ${MACHINE_ARCH} == "hppa" || \
       ${MACHINE_ARCH} == "m68000" || \
       ${MACHINE_ARCH} == "m68k" || \

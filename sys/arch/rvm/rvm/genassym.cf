@@ -1,0 +1,7 @@
+# Machine definitions precede the common kernel genassym definitions.
+include <sys/param.h>
+include <machine/pcb.h>
+
+define RVM_PCB_SP offsetof(struct pcb, pcb_gpr[63])
+define RVM_PCB_SSP offsetof(struct pcb, pcb_ssp)
+define RVM_PCB_PC offsetof(struct pcb, pcb_pc)

@@ -28,7 +28,7 @@
 /*
  * Provisional address-space policy:
  *   user space:  0x0000000000010000 ... 0x00007fffffffffff
- *   kernel VM:   0xffff800000000000 ... 0xffffffffffffffff
+ *   kernel VM:   reserved prefix followed by the prebuilt 256 MiB window
  *
  * Kernel text and the RAM identity map still occupy low addresses.
  * The high kernel window below is for dynamically installed wired mappings.
@@ -39,7 +39,7 @@
 #define USRSTACK			  VM_MAXUSER_ADDRESS
 
 #define VM_MIN_KERNEL_ADDRESS ( (vaddr_t)0xffff800000000000ULL )
-#define VM_MAX_KERNEL_ADDRESS ( (vaddr_t)0xffffffffffff0000ULL )
+#define VM_MAX_KERNEL_ADDRESS (VM_KERNEL_VM_BASE + VM_KERNEL_VM_SIZE)
 
 /* Leave space below the wired kernel window for the bootstrap scratch VA. */
 #define VM_KERNEL_RESERVED	  ( 16UL * 1024 * 1024 )
@@ -76,6 +76,18 @@
 #define VM_PHYSSEG_STRAT					  VM_PSTRAT_BSEARCH
 #define VM_NFREELIST						  1
 #define VM_FREELIST_DEFAULT					  0
+
+/* Initial kernel-map sizing: 4 MiB minimum, bounded by the prebuilt window. */
+#define NKMEMPAGES_MIN_DEFAULT (4UL * 1024 * 1024 / PAGE_SIZE)
+#define NKMEMPAGES_MAX_DEFAULT (128UL * 1024 * 1024 / PAGE_SIZE)
+
+/* Keep buffer-cache VA inside the prebuilt 256 MiB kernel window. */
+#ifndef UBC_WINSHIFT
+#define UBC_WINSHIFT 16
+#endif
+#ifndef UBC_NWINS
+#define UBC_NWINS 512
+#endif
 
 /* No 32-bit compatibility ABI. The low RAM identity map is temporary. */
 

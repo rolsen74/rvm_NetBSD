@@ -9,6 +9,7 @@
          * the C body needs only the two LWP pointers (returning is unused).
          */
         /* bool has an unpadded byte home in the current compiler ABI. */
+#ifndef RVM_KERNEL
         xdef cpu_uarea_alloc
         xref rvm_cpu_uarea_alloc
 cpu_uarea_alloc:
@@ -19,6 +20,7 @@ cpu_uarea_alloc:
         xref rvm_cpu_switchto
 cpu_switchto:
         jmp rvm_cpu_switchto
+#endif
 
         xdef rvm_cpu_switch
 rvm_cpu_switch:

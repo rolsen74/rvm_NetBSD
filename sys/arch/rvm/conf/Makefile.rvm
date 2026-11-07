@@ -1,0 +1,55 @@
+# NetBSD/RVM kernel build using the external FHR toolchain.
+USETOOLS?=no
+NEED_OWN_INSTALL_TARGET?=no
+.include <bsd.own.mk>
+
+S?=../../../..
+RVM=$S/arch/rvm
+GENASSYM_CONF=${RVM}/rvm/genassym.cf
+OPT_MODULAR=%MODULAR%
+# FHR objcopy cannot yet round-trip these relocatable objects. Keep symbols;
+# kernel_cc.py already scopes local names and kernel_link.py needs them.
+KERNMISCMAKEFLAGS+=OBJCOPY=true LORDER=echo TSORT=cat
+CPPFLAGS+=-DNO_KERNEL_RCSIDS -D__NetBSD__ -DRVM_KERNEL
+CFLAGS+=-fno-builtin -fno-pic -fno-pie -fno-stack-protector
+DEBUG=
+ENTRYPOINT=_start
+# FHR lays out/relocates sections in the loader, rather than an ELF ldscript.
+LINKTEXT=
+LINKFLAGS_NORMAL=
+LINKFLAGS_DEBUG=
+LINKFLAGS=-e ${ENTRYPOINT}
+SYSTEM_LD=python3 ${RVM}/stand/kernel_link.py \
+	--cc ${RVM_REAL_CC} --ld ${LD} --nm ${NM} --ar ${AR} \
+	--entry ${ENTRYPOINT} -o ${.TARGET} \
+	${SYSTEM_OBJ:${REMOVE_SWAP}} ${EXTRA_OBJ} vers.o ${OBJS:M*swap${.TARGET}.o}
+# FHR output is already the loader image; ELF post-link/debug tools do not apply.
+SYSTEM_LD_TAIL=
+
+# Share the adapter with libkern sub-makes as well as normal MI objects.
+RVM_REAL_CC:=${CC}
+.export RVM_REAL_CC
+CC=${RVM}/stand/kernel_cc.py
+VMASM?=VMAsm
+NORMAL_S=@echo "assemble ${.TARGET}"; \
+	${RVM_REAL_CC} -E -P -x assembler-with-cpp ${CPPFLAGS} \
+	    ${.IMPSRC} -o ${.TARGET:.o=.vma} && \
+	${VMASM} -i ${.TARGET:.o=.vma} -o ${.TARGET} --obj
+
+%INCLUDES
+%OBJS
+${OBJS}: ${RVM}/stand/kernel_cc.py ${RVM}/stand/fhr_asm.py
+%CFILES
+%SFILES
+%LOAD
+%RULES
+
+.include "$S/conf/Makefile.kern.inc"
+
+# The backend does not implement GCC's stack-usage hook yet.
+CFLAGS:=${CFLAGS:N-fstack-usage:N-Wstack-usage=*}
+COPTS.debugsyms.c=-g0
+SYSTEM_LD_TAIL_STAGE1=@true
+SYSTEM_LD_TAIL_STAGE2=@true
+
+%MAKEOPTIONSAPPEND

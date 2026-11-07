@@ -2,7 +2,7 @@ NetBSD
 ======
 
 This fork contains an experimental RVM architecture port. See the
-[RVM bring-up notes](sys/arch/rvm/README.md) for the standalone bootstrap
+[RVM bring-up notes](sys/arch/rvm/README.md) for the normal kernel and standalone bootstrap
 build, current status, and remaining porting work.
 
 NetBSD is a free, fast, secure, and highly portable Unix-like Open

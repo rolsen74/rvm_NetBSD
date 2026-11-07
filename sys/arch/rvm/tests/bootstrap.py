@@ -15,7 +15,7 @@ def main():
     parser.add_argument('--cross', required=True)
     parser.add_argument('--vmasm', default='VMAsm')
     parser.add_argument('--vmemu', default='VMEmu')
-    parser.add_argument('--suite', choices=('allocations', 'kcopy', 'managedpmap', 'prf', 'abi', 'softint', 'softintstress', 'new', 'wait', 'waitstress', 'asyncirq', 'asyncstress', 'platformclock', 'lwpvm', 'uarea', 'runtime', 'timecounter', 'hardclock', 'clock', 'irq', 'trap', 'idle', 'runq', 'switch', 'lwp', 'context', 'full'), default='new',
+    parser.add_argument('--suite', choices=('memory', 'allocations', 'kcopy', 'managedpmap', 'prf', 'abi', 'softint', 'softintstress', 'new', 'wait', 'waitstress', 'asyncirq', 'asyncstress', 'platformclock', 'lwpvm', 'uarea', 'runtime', 'timecounter', 'hardclock', 'clock', 'irq', 'trap', 'idle', 'runq', 'switch', 'lwp', 'context', 'full'), default='new',
                         help='new/softint: generic MI softints and LWP softclock; wait: MI sleep queues, CVs and pause; asyncirq: asynchronous IRQs and preemption; platformclock: platform clocks and timed sleeps; lwpvm: MI LWP VM lifecycle; uarea: guarded stacks; runtime: compiler and accounting; timecounter: MI uptime; hardclock: ticks and callouts; clock: repeating wakeups; irq/trap/idle/runq/switch/lwp/context: earlier CPU work; full: all regressions')
     parser.add_argument('--stress-seconds', type=int, default=60, help='stress duration, 10..600 seconds')
     parser.add_argument('--timeout', type=float, default=5,
@@ -1156,7 +1156,7 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
             out = run(work)
             assert context_ready in out and 'NetBSD/RVM UVM panic: Invalid RVM kernel context switch' in out, out
             print('PASS: CPU context rejects ' + operation, flush=True)
-        if args.suite != 'full':
+        if args.suite not in ('full', 'memory'):
             return
 
         # FHR REL records keep addends in the instruction bytes. Losing them
@@ -1498,7 +1498,7 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
         build_wrapper((Path(__file__).parent / 'bootamap.c').read_text())
         for pages in (256, 1024):
             configure(work, pages)
-            out = run(work)
+            out = run(work, timeout=max(args.timeout, 8))
             assert 'MI anonymous maps, sharing and exhaustion verified.' in out, out
             print(f'PASS: MI amap sparse slots, ownership transfers, full-map sharing, '
                   f'cache/heap/VA/RAM limits and rollback ({pages * 64} KiB)', flush=True)

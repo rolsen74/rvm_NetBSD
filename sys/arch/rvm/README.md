@@ -1,6 +1,40 @@
 # NetBSD/RVM bring-up
 
-This is a working standalone startup for the RVM virtual CPU, using the
+The normal MI kernel now builds with NetBSD `config(8)` and BSD make, enters
+`kern/init_main.c:main()`, initializes full UVM/kmem, prints the NetBSD banner,
+attaches `mainbus0`/`cpu0`, and reaches the root-device prompt in VMEmu.
+The `EARLY` configuration includes an integration check of real heap allocation,
+recoverable kernel copies, hardclock/softclock delivery and CV wakeup before
+asking for a root device. User mappings, executable loading, user traps/signals,
+a root filesystem and a tty driver are still missing. This is not a shell boot.
+
+```sh
+./build-kernel.sh
+./run-kernel.sh
+```
+
+The helper builds the required host tools, uses the sibling external NetBSD
+toolchain, and writes the normal image and loader under `obj.rvm-kernel/`.
+`RVM_TOOLCHAIN`, `RVM_KERNEL_OBJDIR`, `RVM_KERNEL_TOOLDIR` and `RVM_JOBS` override
+its paths/job count. `./build-kernel.sh EARLY_DIAGNOSTIC` enables MI assertions.
+The complete kernel build log is useful when a new MD interface is required.
+The [normal-kernel session notes](../../../doc/rvm-normal-kernel-2026-11-07.md)
+describe the interfaces, compiler fixes, tests and remaining user-mode work.
+
+```sh
+python3 sys/arch/rvm/tests/kernel_boot.py
+python3 sys/arch/rvm/tests/normal_tools.py
+```
+
+`EARLY` explicitly links temporary user-mode boundaries: user memory accesses
+fail, and unimplemented execution transitions stop with a named panic.
+`GENERIC` excludes those temporary boundaries and cannot link yet. The normal
+kernel uses slow MI softints and cooperative kernel scheduling; the standalone
+harness also exercises its separate timer-preemption path. Keyboard console
+input polls GeneralDriver ASCII key-down events; tty and modifier-key support
+remain pending. The entropy warning is expected without a registered seed/RNG.
+
+The standalone regression image is a separate startup for the RVM CPU, using the
 FHR bootloader and GeneralDriver interface adapted from SnakeOS. It now links
 NetBSD's MI UVM physical-segment registry and raw-page allocator, initializes
 managed-page metadata/free queues, and verifies allocation and freeing.
@@ -37,9 +71,10 @@ Managed kernel mappings now track every dynamic alias, retain hardware read/writ
 history, support unwired entries and revoke permissions across all aliases.
 The corrected GCC argument ABI also enables NetBSD's real format parser,
 stacked `printf` arguments and bounded `snprintf` buffers.
-It does not yet enter kernel `main()`, initialize full UVM km and object pagers,
-or run user processes.
-`build.sh -m rvm` is not integrated yet.
+That test image halts after its checks. `./run.sh` still launches this stage-51
+regression image; `./run-kernel.sh` launches the normal kernel described above.
+`build.sh -m rvm` now recognizes the external-toolchain kernel target. Full
+distribution/userland builds and an in-tree RVM compiler are not integrated.
 
 ## Build and run
 

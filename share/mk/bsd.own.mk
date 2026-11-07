@@ -80,6 +80,15 @@ NEED_OWN_INSTALL_TARGET?=	yes
 # TOOLCHAIN_MISSING?=	yes
 # .endif
 
+.if ${MACHINE} == "rvm"
+# The RVM backend is maintained in the sibling external toolchain.
+TOOLCHAIN_MISSING?=	yes
+MACHINE_GNU_PLATFORM?=	rvm-netbsd
+MKCTF?=		no
+MKDTRACE?=	no
+LIBKERN_ARCH?=	rvm
+.endif
+
 TOOLCHAIN_MISSING?=	no
 
 #

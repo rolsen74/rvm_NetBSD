@@ -423,10 +423,17 @@ __END_DECLS
  * an assumption that may be wrong, but we hope it won't be wrong
  * before we just adopt the C11 atomic API.
  */
+/* An MD port may specify its native atomic-access alignment when it is
+ * weaker than the object size, provided scalar load/store atomicity holds.
+ */
+#ifndef __ATOMIC_ALIGNMENT
+#define __ATOMIC_ALIGNMENT(p) sizeof(*(p))
+#endif
+
 #define	__ATOMIC_PTR_CHECK(p) do					      \
 {									      \
 	CTASSERT(sizeof(*(p)) <= __ATOMIC_SIZE_MAX);			      \
-	KASSERT(((uintptr_t)(p) & (sizeof(*(p)) - 1)) == 0);		      \
+	KASSERT(((uintptr_t)(p) & (__ATOMIC_ALIGNMENT(p) - 1)) == 0);      \
 } while (0)
 
 #ifdef KCSAN

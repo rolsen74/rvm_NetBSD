@@ -1,0 +1,3 @@
+# Same normal-kernel bring-up with MI consistency assertions enabled.
+include "arch/rvm/conf/EARLY"
+options DIAGNOSTIC

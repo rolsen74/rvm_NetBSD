@@ -15,7 +15,8 @@ options         INCLUDE_CONFIG_FILE      # Embed configuration in the kernel
 
 # Keep the first kernel small and debuggable.
 maxusers        8
-makeoptions     DEBUG="-g"              # Debug symbols
+options         HZ=50                   # GeneralDriver GUI timer frequency
+# FHR debug sections are not supported by the current external assembler.
 #options        DIAGNOSTIC              # Extra kernel consistency checks
 #options        DEBUG                   # Additional debugging checks
 #options        DDB                     # Kernel debugger (needs RVM support)
@@ -32,15 +33,15 @@ file-system     FFS                     # Berkeley Fast File System
 
 # RVM virtual devices (not yet implemented).
 # The device declarations must also exist in files.rvm.
-#mainbus0       at root
-#cpu0           at mainbus0
+mainbus0        at root
+cpu0            at mainbus0
 #rvmcons0       at mainbus0             # TODO: virtual console
 #rvmclock0      at mainbus0             # TODO: timer
 #rvmdisk0       at mainbus0             # TODO: virtual disk
 #rvmnet0        at mainbus0             # TODO: virtual network interface
 
 # Basic pseudo-devices (enable when the associated kernel support is ready).
-pseudo-device   loop                    # Loopback network interface
+#pseudo-device  loop                    # Enable together with a network protocol
 #pseudo-device  pty                     # Pseudo-terminals
 #pseudo-device  clockctl                # User clock control
 

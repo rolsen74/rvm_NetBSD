@@ -44,6 +44,8 @@
 
 /* Start with a uniprocessor VM. */
 #define MAXCPUS			 1
+#define COHERENCY_UNIT 64
+#define CACHE_LINE_SIZE 64
 
 /* Network mbuf sizes (must evenly divide NBPG). */
 #define MSIZE			 512

@@ -18,6 +18,16 @@ typedef struct { ipl_t _spl; } ipl_cookie_t;
 
 #ifdef _KERNEL
 int splraise(int);
+static inline ipl_cookie_t
+makeiplcookie(ipl_t ipl)
+{
+	return (ipl_cookie_t){ ._spl = ipl };
+}
+static inline int
+splraiseipl(ipl_cookie_t cookie)
+{
+	return splraise(cookie._spl);
+}
 void splx(int);
 void spl0(void);
 #define splhigh() splraise(IPL_HIGH)

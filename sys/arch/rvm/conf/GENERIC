@@ -1,0 +1,2 @@
+# NetBSD/RVM kernel configuration.  The .in name remains for compatibility.
+include "arch/rvm/conf/GENERIC.in"

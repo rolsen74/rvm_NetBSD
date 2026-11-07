@@ -22,6 +22,7 @@ vaddr_t pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 struct pmap {
 	paddr_t pm_root;
 	struct pmap_statistics pm_stats;
+	unsigned int pm_refs;
 };
 
 #define RVM_BOOT_TEST_VA 0xffff800000000000UL

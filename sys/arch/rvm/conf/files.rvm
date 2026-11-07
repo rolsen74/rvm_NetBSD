@@ -1,10 +1,31 @@
 maxpartitions 16
 maxusers 2 8 64
+defflag opt_rvm.h RVM_EARLY_KERNEL
 
-file arch/rvm/rvm/locore.S
-file arch/rvm/rvm/machdep.c
+file arch/rvm/rvm/kernel_locore.S
+file arch/rvm/rvm/kernel_machdep.c
+file arch/rvm/rvm/kernel_cons.c
+file arch/rvm/rvm/kernel_atomic.c
+file arch/rvm/rvm/kernel_intr.c
+file arch/rvm/rvm/kernel_autoconf.c
+file arch/rvm/rvm/kernel_switch.c
+file arch/rvm/rvm/kernel_pmap.c
+file arch/rvm/rvm/kernel_clock.c
+file arch/rvm/rvm/kernel_pending.c rvm_early_kernel
+file arch/rvm/rvm/kernel_smoke.c rvm_early_kernel
+file arch/rvm/rvm/cpuswitch.S
+file arch/rvm/rvm/kcopy.c
+file arch/rvm/rvm/copy.S
+
+device mainbus { }
+attach mainbus at root
+device cpu
+attach cpu at mainbus
 file arch/rvm/rvm/earlycons.c
 file arch/rvm/rvm/bootmem.c
 file arch/rvm/rvm/pmap.c
 file arch/rvm/rvm/uvm_machdep.c
 file dev/cons.c
+
+include "conf/majors.std"
+include "conf/majors.storage"

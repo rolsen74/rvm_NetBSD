@@ -64,6 +64,29 @@ a variadic function, by-reference aggregate arguments and aggregate returns.
 The MI formatter suite additionally checks mixed-width stacked printf arguments,
 widths, precision, length queries and bounded-buffer truncation.
 
+# Normal-kernel data emission and alignment
+
+`rvm-data-alignment.patch` adds aligned/unaligned `.quad` emission and restores
+`ASM_OUTPUT_ALIGN` as `.balign`. Previously even `const void *p = &object`
+could fail with "initializer for integer/fixed-point value is too complicated",
+and explicitly aligned C stacks/objects silently lost their requested alignment.
+The normal kernel needs both fixes for MI pointer tables and page/cache alignment.
+The caller-home ABI is unchanged by this patch, but clean-build all objects to
+restore their alignments. The helper checks these hooks before building.
+
+The maintained sibling backend and installed NetBSD `cc1`/`lto1` include these
+fixes. Their immediate previous versions are backed up under
+`/tmp/rvm-netbsd-normal-toolchain-backup-20261107/`. Other installed target
+compilers, VMAsm and VMEmu were not changed in this normal-kernel session.
+
+FHR object records currently lose local/weak binding. `kernel_cc.py` gives
+private C definitions unique per-object names and records weak definitions;
+`kernel_link.py` resolves strong-over-weak and first-weak precedence using
+temporary object copies before linking. It includes libkern members explicitly.
+This adapter supports static kernels, not shared objects/loadable modules.
+The build also bypasses ELF objcopy/metadata post-processing that FHR cannot
+round-trip. These workarounds should eventually move into the object tools.
+
 # FHR linker diagnostics
 
 `rvm-fhr-undefined-symbols.patch` applies to the maintained sibling

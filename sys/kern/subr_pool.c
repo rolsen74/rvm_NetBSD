@@ -84,7 +84,14 @@ __KERNEL_RCSID(0, "$NetBSD: subr_pool.c,v 1.299 2026/09/27 22:01:23 riastradh Ex
 TAILQ_HEAD(, pool) pool_head = TAILQ_HEAD_INITIALIZER(pool_head);
 
 /* Private pool for page header structures */
-#define	PHPOOL_MAX	8
+/* Cover one-byte PR_NOTOUCH items even with hardware pages above 4 KiB.
+ * Bitmap words contain 32 items; index n covers 32 * 2^n items.
+ */
+#if defined(PGSHIFT) && PGSHIFT > 12
+#define PHPOOL_MAX (PGSHIFT - 4)
+#else
+#define PHPOOL_MAX 8
+#endif
 static struct pool phpool[PHPOOL_MAX];
 #define	PHPOOL_FREELIST_NELEM(idx) \
 	(((idx) == 0) ? BITMAP_MIN_SIZE : BITMAP_SIZE * (1 << (idx)))

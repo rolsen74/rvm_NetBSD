@@ -1,0 +1,4 @@
+# Normal MI kernel with explicit fail-stop user-mode hooks for bring-up.
+# This is not a usable multiuser kernel; GENERIC omits these temporary hooks.
+include "arch/rvm/conf/GENERIC"
+options RVM_EARLY_KERNEL
