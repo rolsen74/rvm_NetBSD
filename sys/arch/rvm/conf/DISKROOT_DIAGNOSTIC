@@ -1,0 +1,3 @@
+# Run disk/exec integration with MI consistency assertions enabled.
+include "arch/rvm/conf/DISKROOT"
+options DIAGNOSTIC

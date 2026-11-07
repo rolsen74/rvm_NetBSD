@@ -116,7 +116,9 @@ cwdfree(struct cwdinfo *cwdi)
 		return;
 	membar_acquire();
 
-	vrele(cwdi->cwdi_cdir);
+	/* cwdinit() can copy an empty cwd before the root filesystem exists. */
+	if (cwdi->cwdi_cdir)
+		vrele(cwdi->cwdi_cdir);
 	rw_destroy(&cwdi->cwdi_lock);
 	if (cwdi->cwdi_rdir)
 		vrele(cwdi->cwdi_rdir);

@@ -13,6 +13,7 @@ struct rvm_pv_entry {
 };
 #ifdef RVM_KERNEL
 volatile uint64_t *rvm_user_pte(pmap_t, vaddr_t);
+int rvm_user_pmap_prepare(pmap_t);
 int rvm_user_enter(pmap_t, vaddr_t, paddr_t, vm_prot_t, u_int);
 void rvm_user_remove(pmap_t, vaddr_t, vaddr_t);
 void rvm_user_protect(pmap_t, vaddr_t, vaddr_t, vm_prot_t);

@@ -11,6 +11,10 @@
 #include <machine/psl.h>
 #include <machine/pmap.h>
 #include <machine/asyncirq.h>
+#ifdef RVM_KERNEL
+#include <machine/user.h>
+#include <uvm/uvm_extern.h>
+#endif
 void rvm_copyfault_entry(void);
 int rvm_kcopy_bytes(const void *, void *, size_t);
 extern char rvm_kcopy_read[], rvm_kcopy_write[];
@@ -69,6 +73,51 @@ void rvm_copyfault_dispatch(struct rvm_copyfault_frame *frame)
 	uint64_t header = saved->header;
 	unsigned int vector = (header >> 32) & 0xffff;
 	vaddr_t base, end, address = (vaddr_t)frame;
+#ifdef RVM_KERNEL
+	if (USERMODE(header)) { rvm_user_exception(saved); return; }
+	/* MI exec arguments use a pageable kernel submap.  Resolve legitimate
+	 * supervisor data faults before considering the guarded-copy recovery.
+	 * Only ordinary thread context at IPL_NONE may enter the VM fault path.
+	 * The copy guard is per-LWP; release it while UVM may sleep, and hide the
+	 * recovery cookie so an unrelated fault in UVM cannot masquerade as EFAULT.
+	 */
+	if (rvm_kcopy_ready() && kernel_map != NULL &&
+	    rvm_boot_get_cr() == RVM_CR_MMU && !cpu_intr_p() &&
+	    l != NULL && l == curcpu()->ci_onproc && l->l_addr != NULL &&
+	    curcpu()->ci_cpl == IPL_NONE && curcpu()->ci_mtx_count == 0 &&
+	    (header >> 48) == RVM_EF_VERSION_MMU_FAULT &&
+	    !(header & (PSL_H | PSL_IPL_MASK)) && saved->root == pmap_kernel()->pm_root &&
+	    (vector == RVM_VECTOR_MMU_READ || vector == RVM_VECTOR_MMU_WRITE ||
+	    vector == RVM_VECTOR_MMU_ENABLE) &&
+	    frame->virtual_address >= VM_KERNEL_VM_BASE &&
+	    frame->virtual_address < VM_KERNEL_VM_BASE + VM_KERNEL_VM_SIZE &&
+	    l->l_md.md_irq_hold <= 1) {
+		base = l->l_md.md_kstack_base;
+		end = base + l->l_md.md_kstack_size;
+		if (base != 0 && end >= base && address >= base && address <= end &&
+		    end - address >= sizeof(*frame) && !(address & STACK_ALIGNBYTES)) {
+			struct pcb *pcb = lwp_getpcb(l);
+			void *cookie = pcb->pcb_onfault;
+			unsigned hold = l->l_md.md_irq_hold;
+			int error;
+			pcb->pcb_onfault = NULL;
+			if (hold != 0)
+				rvm_intr_resume(0);
+			else
+				rvm_intr_apply();
+			error = uvm_fault(kernel_map, trunc_page(frame->virtual_address),
+			    vector == RVM_VECTOR_MMU_WRITE ? VM_PROT_WRITE : VM_PROT_READ);
+			rvm_intr_disable();
+			pcb->pcb_onfault = cookie;
+			if (hold != 0)
+				(void)rvm_intr_suspend();
+			else
+				rvm_intr_apply();
+			if (error == 0)
+				return;
+		}
+	}
+#endif
 	if (!rvm_kcopy_ready() || rvm_boot_get_cr() != RVM_CR_MMU || cpu_intr_p() ||
 	    l == NULL || l != curcpu()->ci_onproc || l->l_addr == NULL ||
 	    l->l_md.md_pcb != l->l_addr || l->l_md.md_irq_hold == 0 ||

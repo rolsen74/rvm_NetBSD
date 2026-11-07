@@ -1,5 +1,10 @@
 # Normal NetBSD/RVM kernel, 2026-11-07
 
+**Later progress:** [real user processes and syscall/signal handling](rvm-user-process-2026-11-07.md)
+and [HARDFILE, FFS root and native FHR exec](rvm-diskroot-2026-11-07.md)
+supersede the user-mode/storage limitations below; this document retains the
+earlier bring-up history.
+
 The external-toolchain build now produces an experimental kernel through real
 NetBSD `config(8)`, BSD make and `Makefile.kern.inc`. It enters the unchanged
 `sys/kern/init_main.c:main()`, initializes full UVM, kmem, pools, process/LWP

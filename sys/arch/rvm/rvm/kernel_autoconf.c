@@ -11,6 +11,7 @@ static int mainbus_match(device_t, cfdata_t, void *);
 static void mainbus_attach(device_t, device_t, void *);
 static int cpu_match(device_t, cfdata_t, void *);
 static void cpu_attach(device_t, device_t, void *);
+void rvm_console_attach(void);
 #ifdef RVM_EARLY_KERNEL
 void rvm_kernel_smoke(void);
 #endif
@@ -31,6 +32,8 @@ mainbus_attach(device_t parent __unused, device_t self, void *aux __unused)
 
 	aprint_naive("\n");
 	aprint_normal("\n");
+	config_found(self, __UNCONST(name), NULL, CFARGS_NONE);
+	name = "hardfile";
 	config_found(self, __UNCONST(name), NULL, CFARGS_NONE);
 }
 
@@ -54,6 +57,7 @@ cpu_configure(void)
 	(void)splhigh();
 	if (config_rootfound("mainbus", NULL) == NULL)
 		panic("RVM mainbus not configured");
+	rvm_console_attach();
 	spl0();
 }
 

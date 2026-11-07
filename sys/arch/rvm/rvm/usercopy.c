@@ -20,6 +20,7 @@ rvm_copyuser(struct vmspace *vm, vaddr_t user, void *kernel, size_t len,
 	unsigned char *buffer = kernel;
 	size_t copied = 0;
 	int error = 0;
+	bool terminated = false;
 	if (done != NULL) *done = 0;
 	if (len == 0) return string ? ENAMETOOLONG : 0;
 	if (user < VM_MIN_ADDRESS || user >= VM_MAXUSER_ADDRESS ||
@@ -38,16 +39,38 @@ rvm_copyuser(struct vmspace *vm, vaddr_t user, void *kernel, size_t len,
 		if (pte == NULL || (*pte & (RVM_PTE_VALID | permission | RVM_PTE_SUPERVISOR)) !=
 		    (RVM_PTE_VALID | permission)) { error = EFAULT; break; }
 		pa = (*pte & ~PAGE_MASK) | (user & PAGE_MASK);
-		if (string) amount = 1; /* Stop before a fault beyond the terminator. */
-		error = out ? kcopy(buffer + copied, (void *)(uintptr_t)pa, amount) :
-		    kcopy((void *)(uintptr_t)pa, buffer + copied, amount);
+		if (string) {
+			unsigned char text[256];
+			/* Inspect a bounded chunk before writing it. Neither source
+			 * nor destination crosses a page, and bytes following NUL
+			 * are never written. In particular, do not touch the next
+			 * page merely because the caller supplied ARG_MAX as len.
+			 */
+			amount = MIN(amount, sizeof(text));
+			amount = MIN(amount, PAGE_SIZE -
+			    (((uintptr_t)buffer + copied) & PAGE_MASK));
+			error = kcopy(out ? buffer + copied : (void *)(uintptr_t)pa,
+			    text, amount);
+			if (error != 0) break;
+			for (size_t i = 0; i < amount; i++) {
+				if (text[i] == '\0') {
+					amount = i + 1;
+					terminated = true;
+					break;
+				}
+			}
+			error = kcopy(text, out ? (void *)(uintptr_t)pa : buffer + copied, amount);
+		} else {
+			error = out ? kcopy(buffer + copied, (void *)(uintptr_t)pa, amount) :
+			    kcopy((void *)(uintptr_t)pa, buffer + copied, amount);
+		}
 		if (error != 0) break;
 		*pte |= RVM_PTE_USED_READ | (out ? RVM_PTE_USED_WRITE : 0);
 		copied += amount; user += amount;
-		if (string && buffer[copied - 1] == '\0') break;
+		if (terminated) break;
 	}
 	if (done != NULL) *done = copied;
-	if (error == 0 && string && (copied == 0 || buffer[copied - 1] != '\0'))
+	if (error == 0 && string && !terminated)
 		error = ENAMETOOLONG;
 	return error;
 }

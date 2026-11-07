@@ -1,0 +1,5 @@
+# Disk-root startup with the production kernel configuration and no resident
+# EARLY fixtures. The disposable user programs still run from the FFS image.
+include "arch/rvm/conf/GENERIC.in"
+no config netbsd
+config netbsd root on ld0a type ffs

@@ -202,6 +202,25 @@ rvm_user_smoke(void)
 	    false, true, &done) == EFAULT && done == 1);
 	CHECK(rvm_copyuser(parent, VM_MAXUSER_ADDRESS - 1, &terminator, 1,
 	    true, true, &done) == 0 && done == 1);
+	/* Both string directions must also stop at a kernel-page boundary.
+	 * Reserve two VA pages but map only the first; a chunk that speculates
+	 * into the next page would fail before observing the final-byte NUL. */
+	vaddr_t string_alias = uvm_km_alloc(kernel_map, 2 * PAGE_SIZE, 0,
+	    UVM_KMF_VAONLY | UVM_KMF_NOWAIT);
+	CHECK(string_alias != 0 && pmap_extract(pm, base, &pa));
+	pmap_kenter_pa(string_alias, trunc_page(pa), UVM_PROT_RW, 0);
+	pmap_update(pmap_kernel());
+	char *kernel_end = (void *)(string_alias + PAGE_SIZE - 1);
+	char old_end = *kernel_end;
+	*kernel_end = 0;
+	CHECK(rvm_copyuser(parent, base + 128, kernel_end, 512,
+	    true, true, &done) == 0 && done == 1);
+	CHECK(rvm_copyuser(parent, base + 128, kernel_end, 512,
+	    false, true, &done) == 0 && done == 1);
+	*kernel_end = old_end;
+	pmap_kremove(string_alias, PAGE_SIZE);
+	pmap_update(pmap_kernel());
+	uvm_km_free(kernel_map, string_alias, 2 * PAGE_SIZE, UVM_KMF_VAONLY);
 
 	CHECK(uvm_map_protect(&parent->vm_map, base, base + PAGE_SIZE,
 	    VM_PROT_READ, false) == 0);

@@ -83,6 +83,10 @@ rvm_intr_disable:
 rvm_irq_set_cr:
         mtctrl r2,cr
         rts
+        xdef rvm_irq_set_sr
+rvm_irq_set_sr:
+        mtctrl r2,sr
+        rts
         xdef rvm_irq_set_inte
 rvm_irq_set_inte:
         mtctrl r2,inte

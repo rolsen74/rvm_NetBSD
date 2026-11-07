@@ -18,6 +18,8 @@
 
 #ifndef RVM_KERNEL
 #define __HAVE_CPU_UAREA_ROUTINES 1
+#else
+#define __HAVE_SYSCALL_INTERN 1
 #endif
 #define __HAVE_VM_PAGE_MD 1
 

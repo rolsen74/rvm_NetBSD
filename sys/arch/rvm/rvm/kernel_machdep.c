@@ -16,6 +16,7 @@
 #include <machine/pcb.h>
 #include <machine/bootcopy.h>
 #include <machine/psl.h>
+#include <machine/user.h>
 
 char machine[] = MACHINE;
 char machine_arch[] = MACHINE_ARCH;
@@ -60,6 +61,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	lwp0.l_md.md_kstack_base = (vaddr_t)rvm_boot_stack + roundup(sizeof(*pcb), 16);
 	lwp0.l_md.md_kstack_size = USPACE - roundup(sizeof(*pcb), 16);
 	if (!rvm_kcopy_init()) panic("RVM copy fault vectors unavailable");
+	rvm_user_vectors_init();
 	uvm_md_init();
 	physmem = atop(rvm_bootmem.ram_end);
 	uvm_page_physload(atop(rvm_bootmem.free_start), atop(rvm_bootmem.free_end),

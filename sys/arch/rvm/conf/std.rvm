@@ -12,10 +12,7 @@ include         "conf/std"
 # Executable support
 #
 # RVM uses the FHR executable format.
-# EXEC_FHR will be added after the FHR exec loader
-# and its kernel configuration declaration exist.
-#
-# options       EXEC_FHR
+options         EXEC_FHR
 
 # Shell scripts (#! interpreter support)
 options         EXEC_SCRIPT

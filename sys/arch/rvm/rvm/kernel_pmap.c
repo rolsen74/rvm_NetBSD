@@ -65,6 +65,20 @@ lookup(pmap_t pm, vaddr_t va, bool create)
 	return &table[(va >> PAGE_SHIFT) & 255];
 }
 
+/* An empty address space must use a real zeroed root, never physical page 0
+ * (which still contains loader data). Fork can reach user return before any
+ * leaf mappings have been faulted into its new pmap. */
+int
+rvm_user_pmap_prepare(pmap_t pm)
+{
+	unsigned int guard = rvm_intr_suspend();
+	KASSERT(pm != pmap_kernel());
+	if (pm->pm_root == 0) pm->pm_root = alloc_table(pm);
+	int error = pm->pm_root != 0 ? 0 : ENOMEM;
+	rvm_intr_resume(guard);
+	return error;
+}
+
 volatile uint64_t *
 rvm_user_pte(pmap_t pm, vaddr_t va)
 {

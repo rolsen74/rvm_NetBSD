@@ -90,6 +90,13 @@ def link(args):
             objects[index] = target
         subprocess.run([args.ld, '-e', args.entry, '-Map', str(args.output) + '.map',
                         '-o', str(args.output)] + list(map(str, objects)), check=True)
+        # FHR executables do not encode e_entry. The loader starts at the
+        # first code byte, even when ld was passed a different -e symbol.
+        mapping = Path(str(args.output) + '.map').read_text()
+        entry = re.search(r'^\s+0x([0-9a-f]+)\s+' + re.escape(args.entry) +
+                          r'\s*$', mapping, re.M)
+        if entry is None or int(entry[1], 16) != 0:
+            raise SystemExit('FHR entry must be first in .text; put kernel_locore first')
 
 
 def main():

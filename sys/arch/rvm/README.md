@@ -1,15 +1,31 @@
 # NetBSD/RVM bring-up
 
-The normal MI kernel now builds with NetBSD `config(8)` and BSD make, enters
-`kern/init_main.c:main()`, initializes full UVM/kmem, prints the NetBSD banner,
-attaches `mainbus0`/`cpu0`, and reaches the root-device prompt in VMEmu.
-The `EARLY` configuration includes an integration check of real heap allocation,
-recoverable kernel copies, hardclock/softclock delivery and CV wakeup before
-asking for a root device. Managed user mappings, UVM demand-zero/COW faults,
-user copies and wired I/O aliases now work. A controlled hardware test executes
-user code and verifies syscall/RTE, kernel isolation, NX and privilege faults.
-Executable loading, the process syscall/trap/signal ABI, a root filesystem and
-a tty driver are still missing. This is not a shell boot.
+The normal MI kernel builds with NetBSD config and BSD make, initializes full
+UVM and native devices, and reaches the root-device prompt in VMEmu. EARLY also
+runs a real user process that prints through NetBSD write(2), sleeps, forks,
+checks COW, handles signals on an alternate stack, and exits/waits. User timer
+interrupts and fatal fault containment are checked. GENERIC now links and boots
+with the same process interfaces and no boot-time test fixtures.
+
+The HARDFILE backend now attaches as `ld0`. DISKROOT mounts a big-endian UFS2
+root on `ld0a`, executes an FHR `/sbin/init` from disk, and opens `/dev/console`.
+That small integration init reads a file, rejects malformed executables, and
+forks/executes/waits for a GCC-compiled user program. The fixture has no libc
+dependency; NetBSD userland startup/runtime libraries and a tty driver are
+still needed for the production init and a shell.
+See the [disk-root notes](../../../doc/rvm-diskroot-2026-11-07.md) and earlier
+[user-process notes](../../../doc/rvm-user-process-2026-11-07.md).
+
+```sh
+./build-diskroot.sh
+./run-diskroot.sh
+```
+
+This uses `obj.rvm-diskroot/` and regenerates a disposable 16 MiB root image.
+The init fixture finishes its checks and sleeps; it is not a shell prompt.
+The separate disk MMIO page consumes virtual address space, with one 64 KiB
+RAM bounce page in the driver. A normal EARLY/GENERIC boot without HARDFILE
+still recovers the absent-device probe and reaches the root-device prompt.
 
 ```sh
 ./build-kernel.sh
@@ -27,16 +43,21 @@ describe the interfaces, compiler fixes, tests and remaining user-mode work.
 ```sh
 python3 sys/arch/rvm/tests/kernel_boot.py
 python3 sys/arch/rvm/tests/normal_tools.py
+python3 sys/arch/rvm/tests/hardfile.py
+python3 sys/arch/rvm/tests/hardfile.py --objdir obj.rvm-diskroot --diskroot
 ```
 
-`EARLY` explicitly links temporary boundaries for the remaining process
-interfaces; unimplemented execution transitions stop with a named panic.
-User-memory copying and mapping are real implementations shared with `GENERIC`.
-`GENERIC` excludes those temporary boundaries and cannot link yet. The normal
-kernel uses slow MI softints and cooperative kernel scheduling; the standalone
-harness also exercises its separate timer-preemption path. Keyboard console
-input polls GeneralDriver ASCII key-down events; tty and modifier-key support
-remain pending. The entropy warning is expected without a registered seed/RNG.
+EARLY adds test fixtures; GENERIC uses the same syscall/trap/signal code.
+Boot-console keyboard input still polls GeneralDriver ASCII key-down events;
+the new console character device provides output but does not yet implement
+readable tty descriptors. Core-file output,
+TLS and floating-point contexts remain unsupported. The entropy warning is
+expected without a registered seed/RNG. The normal kernel uses slow MI softints;
+user return handles MI rescheduling and pending signals.
+
+The remaining sections record historical standalone stages; their pending-work
+statements describe those stages. Current normal-kernel status is summarized
+above and in the user-process notes.
 
 The standalone regression image is a separate startup for the RVM CPU, using the
 FHR bootloader and GeneralDriver interface adapted from SnakeOS. It now links

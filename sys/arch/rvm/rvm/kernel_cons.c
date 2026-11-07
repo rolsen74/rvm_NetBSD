@@ -1,9 +1,51 @@
 /* GeneralDriver output console, available before normal autoconfiguration. */
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/conf.h>
+#include <sys/uio.h>
 #include <dev/cons.h>
 #include <machine/boot.h>
 #include <machine/generic.h>
+void rvm_console_attach(void);
+
+static dev_type_open(rvmconsopen);
+static dev_type_write(rvmconswrite);
+const struct cdevsw rvmcons_cdevsw = {
+	.d_open = rvmconsopen,
+	.d_close = nullclose,
+	.d_read = noread,
+	.d_write = rvmconswrite,
+	.d_ioctl = noioctl,
+	.d_stop = nostop,
+	.d_tty = notty,
+	.d_poll = nopoll,
+	.d_mmap = nommap,
+	.d_kqfilter = nokqfilter,
+	.d_discard = nodiscard,
+	.d_flag = D_OTHER,
+};
+
+static int
+rvmconsopen(dev_t dev, int flags __unused, int mode __unused,
+    struct lwp *l __unused)
+{
+	return minor(dev) == 0 ? 0 : ENXIO;
+}
+
+static int
+rvmconswrite(dev_t dev __unused, struct uio *uio, int flags __unused)
+{
+	char buffer[128];
+	while (uio->uio_resid != 0) {
+		size_t size = MIN(sizeof(buffer), uio->uio_resid);
+		int error = uiomove(buffer, size, uio);
+		if (error != 0)
+			return error;
+		for (size_t i = 0; i < size; i++)
+			rvm_early_putchar((unsigned char)buffer[i]);
+	}
+	return 0;
+}
 
 static void
 rvm_cnputc(dev_t dev __unused, int ch)
@@ -35,6 +77,14 @@ static struct consdev rvm_cons = {
 	.cn_pri = CN_INTERNAL,
 };
 struct consdev constab[] = { { .cn_pri = CN_DEAD } };
+
+void
+rvm_console_attach(void)
+{
+	int major = cdevsw_lookup_major(&rvmcons_cdevsw);
+	KASSERT(major >= 0);
+	rvm_cons.cn_dev = makedev(major, 0);
+}
 
 void
 consinit(void)

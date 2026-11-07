@@ -1,0 +1,5 @@
+# Boot an FFS filesystem occupying the whole HARDFILE image.
+# This configuration requires a HARDFILE at the platform's default MMIO address.
+include "arch/rvm/conf/EARLY"
+no config netbsd
+config netbsd root on ld0a type ffs

@@ -10,6 +10,7 @@
 #include <machine/frame.h>
 #include <machine/switch.h>
 #include <machine/asyncirq.h>
+#include <machine/user.h>
 
 struct lwp *rvm_cpu_switch(struct pcb *, struct pcb *, struct lwp *);
 void rvm_lwp_trampoline(void);
@@ -20,19 +21,22 @@ __CTASSERT(offsetof(struct pcb, pcb_ssp) == RVM_PCB_SSP);
 __CTASSERT(offsetof(struct pcb, pcb_pc) == RVM_PCB_PC);
 
 void
-cpu_lwp_fork(struct lwp *parent, struct lwp *child, void *stack __unused,
-    size_t stacksize __unused, void (*func)(void *), void *arg)
+cpu_lwp_fork(struct lwp *parent, struct lwp *child, void *stack,
+    size_t stacksize, void (*func)(void *), void *arg)
 {
 	struct pcb *pcb = child->l_addr;
 	vaddr_t top = (vaddr_t)pcb + USPACE;
 	struct trapframe *tf = (void *)((top - sizeof(*tf)) & ~(vaddr_t)15);
 	uint64_t *frame = (void *)((vaddr_t)tf - RVM_SWITCH_SIZE);
 
-	KASSERT(parent == curlwp);
+	/* kthread_create uses lwp0 as its template even when called by a
+	 * different thread (for example lazy workers during executable I/O). */
+	KASSERT(parent == curlwp || parent == &lwp0);
 	KASSERT(pcb != NULL && func != NULL);
 	memset(pcb, 0, sizeof(*pcb));
 	memset(tf, 0, sizeof(*tf));
 	if (parent->l_md.md_tf != NULL) *tf = *parent->l_md.md_tf;
+	if (stack != NULL) tf->tf_usp = (vaddr_t)stack + stacksize;
 	pcb->pcb_usp = tf->tf_usp;
 	memset(frame, 0, RVM_SWITCH_SIZE);
 	frame[0] = (uintptr_t)func;
@@ -63,6 +67,11 @@ rvm_cpu_lwp_start(void (*func)(void *), void *arg, struct lwp *previous)
 {
 	lwp_startup(previous, curlwp);
 	func(arg);
+	if (!(curlwp->l_flag & LW_SYSTEM)) {
+		rvm_user_return(curlwp);
+		curlwp->l_md.md_tf->tf_mmu_table = curlwp->l_proc->p_vmspace->vm_map.pmap->pm_root;
+		rvm_user_resume(curlwp->l_md.md_tf);
+	}
 	lwp_exit(curlwp);
 	panic("RVM LWP exit returned");
 }

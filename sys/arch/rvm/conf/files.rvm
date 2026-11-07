@@ -1,8 +1,10 @@
 maxpartitions 16
 maxusers 2 8 64
 defflag opt_rvm.h RVM_EARLY_KERNEL
+defflag opt_fhr.h EXEC_FHR
 
 file arch/rvm/rvm/kernel_locore.S
+file arch/rvm/rvm/exec_fhr.c exec_fhr
 file arch/rvm/rvm/kernel_machdep.c
 file arch/rvm/rvm/kernel_cons.c
 file arch/rvm/rvm/kernel_atomic.c
@@ -13,19 +15,33 @@ file arch/rvm/rvm/kernel_pmap.c
 file arch/rvm/rvm/usercopy.c
 file arch/rvm/rvm/userio.c
 file arch/rvm/rvm/user_context.c
+file arch/rvm/rvm/user_entry.S
+file arch/rvm/rvm/user_trap.c
+file arch/rvm/rvm/user_start.c
+file arch/rvm/rvm/user_signal.c
+file arch/rvm/rvm/user_misc.c
+file arch/rvm/rvm/syscall.c
+file arch/rvm/rvm/console_file.c
+file arch/rvm/rvm/process_smoke.c rvm_early_kernel
+file arch/rvm/rvm/process_program.S rvm_early_kernel
 file arch/rvm/rvm/kernel_clock.c
-file arch/rvm/rvm/kernel_pending.c rvm_early_kernel
 file arch/rvm/rvm/kernel_smoke.c rvm_early_kernel
+file arch/rvm/rvm/disk_smoke.c rvm_early_kernel
 file arch/rvm/rvm/user_smoke.c rvm_early_kernel
 file arch/rvm/rvm/user_probe.S rvm_early_kernel
 file arch/rvm/rvm/cpuswitch.S
 file arch/rvm/rvm/kcopy.c
 file arch/rvm/rvm/copy.S
+file arch/rvm/rvm/mmio.c
+file arch/rvm/rvm/mmio_probe.S
+file kern/subr_disk_4bsd.c disk
 
 device mainbus { }
 attach mainbus at root
 device cpu
 attach cpu at mainbus
+attach ld at mainbus with ld_rvm
+file arch/rvm/dev/ld_rvm.c ld_rvm
 file arch/rvm/rvm/earlycons.c
 file arch/rvm/rvm/bootmem.c
 file arch/rvm/rvm/pmap.c
@@ -34,3 +50,4 @@ file dev/cons.c
 
 include "conf/majors.std"
 include "conf/majors.storage"
+device-major rvmcons char 500

@@ -1,4 +1,4 @@
-/* MD kernel-LWP storage. User trap/syscall integration remains pending. */
+/* MD LWP trapframe, syscall dispatch and IRQ/AST bookkeeping. */
 #ifndef _RVM_PROC_H_
 #define _RVM_PROC_H_
 

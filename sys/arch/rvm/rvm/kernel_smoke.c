@@ -13,6 +13,8 @@
 
 void rvm_kernel_smoke(void);
 void rvm_user_smoke(void);
+void rvm_process_smoke(void);
+void rvm_disk_smoke(void);
 #define CHECK(c) do { if (!(c)) panic("RVM normal kernel check: " #c); } while (0)
 
 struct smoke_state {
@@ -97,4 +99,6 @@ rvm_kernel_smoke(void)
 	printf("RVM normal kernel: four-byte-aligned 64-bit atomic operations verified\n");
 	printf("RVM normal kernel: 65536-item pool bitmap verified\n");
 	printf("RVM normal kernel: per-LWP user stack pointer switching verified\n");
+	rvm_process_smoke();
+	rvm_disk_smoke();
 }

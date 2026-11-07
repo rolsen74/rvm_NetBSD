@@ -4,7 +4,8 @@
  * Copyright (c) 2026 Rene W. Olsen
  *
  * Based on RVM CPU overview.md and v0000 control-register definitions.
- * Initial machine-dependent interface; not yet integrated with locore.S.
+ * Normal user entry uses fixed offsets in machine/user.h; standalone tests
+ * also exercise the raw returning prefixes in machine/trap.h.
  */
 
 #ifndef _RVM_FRAME_H_
@@ -29,8 +30,9 @@
  * headers store SR flags in bits 0..7 and SR interrupt priority in bits
  * 16..21 of the first big-endian word. The +4 halfword contains those
  * priority bits in place; this is not a truncated 16-bit saved SR.
- * Supervisor version-2 return and a version-0 timer IRQ/HALT return are
- * exercised in VMEmu. Nested/user IRQs and fault variants remain unverified.
+ * Supervisor/user version-2 return, version-0 user timer IRQ return,
+ * version-3 user MMU faults and version-10 privilege faults are exercised
+ * in VMEmu.
  * The checked returning prefix (63 GPRs + version-2 hardware frame) is
  * defined separately in machine/trap.h; struct trapframe below is provisional.
  */
@@ -86,7 +88,7 @@
  * tf_sr is a normalized 64-bit status value; the raw hardware header also
  * retains interrupt priority in bits 16..21.
  *
- * NOTE: No fixed assembly offsets or ABI layout guarantees yet.
+ * Assembly offsets are declared in machine/user.h and asserted in user_trap.c.
  */
 struct trapframe
 {
@@ -107,15 +109,6 @@ struct trapframe
 /* Test the saved execution mode, NOT the trap handler's current mode. */
 #define RVM_TF_USERMODE( tf ) USERMODE ( ( tf )->tf_sr )
 
-/*
- * TODO before locore.S:
- * - Verify user-mode and fault frame handling beyond supervisor version 2.
- * - Verify IRQ entry/return and nesting before enabling hardware interrupts.
- * - Define restart/advance rules for recoverable faults.
- * - Confirm which MMU table address is stored in the frame.
- * - Confirm how to recover/save general registers before using them.
- * - Assign fixed C/assembly trapframe offsets after ABI review.
- */
 #endif /* !_LOCORE */
 
 #endif /* _RVM_FRAME_H_ */

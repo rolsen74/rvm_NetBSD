@@ -1,5 +1,6 @@
 /* GeneralDriver timecounter, read-only host RTC, and alternating timer IRQs. */
 #include <sys/param.h>
+#include <machine/user.h>
 #include <sys/systm.h>
 #include <sys/cpu.h>
 #include <sys/kernel.h>
@@ -110,6 +111,7 @@ rvm_kernel_irq(uint64_t *saved)
 	}
 	ci->ci_intr_depth--;
 	ci->ci_cpl = oldipl;
+	if (cf.cf_usermode) rvm_user_irq_return((void *)(saved + 1));
 	/* Slow softints are selected by MI mi_switch(). They remain pending
 	 * until a scheduling point; this port does not advertise fast softints
 	 * or in-kernel preemption in its normal-kernel feature flags yet.
