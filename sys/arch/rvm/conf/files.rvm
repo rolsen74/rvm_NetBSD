@@ -10,9 +10,14 @@ file arch/rvm/rvm/kernel_intr.c
 file arch/rvm/rvm/kernel_autoconf.c
 file arch/rvm/rvm/kernel_switch.c
 file arch/rvm/rvm/kernel_pmap.c
+file arch/rvm/rvm/usercopy.c
+file arch/rvm/rvm/userio.c
+file arch/rvm/rvm/user_context.c
 file arch/rvm/rvm/kernel_clock.c
 file arch/rvm/rvm/kernel_pending.c rvm_early_kernel
 file arch/rvm/rvm/kernel_smoke.c rvm_early_kernel
+file arch/rvm/rvm/user_smoke.c rvm_early_kernel
+file arch/rvm/rvm/user_probe.S rvm_early_kernel
 file arch/rvm/rvm/cpuswitch.S
 file arch/rvm/rvm/kcopy.c
 file arch/rvm/rvm/copy.S

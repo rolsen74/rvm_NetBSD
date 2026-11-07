@@ -23,8 +23,9 @@ existing FHR loader. It uses `../rvm_gcc/rvm_cross_netbsd` by default. Override
 `./build-kernel.sh EARLY_DIAGNOSTIC` enables MI consistency assertions.
 `GENERIC` intentionally excludes the temporary user-mode boundaries in
 `kernel_pending.c`, and still reports missing interfaces at link time.
-`EARLY` user memory operations fail with `EFAULT`; unimplemented execution
-transitions stop with named panics. These hooks do not implement user support.
+User mappings and copies now have real implementations. Unimplemented process
+execution transitions still stop with named panics in `EARLY`. The hardware
+user-mode probe is a test, not a process startup path or the NetBSD syscall ABI.
 
 ## Interfaces added
 
@@ -35,8 +36,16 @@ transitions stop with named panics. These hooks do not implement user support.
   and context switching. Slow MI softints run through normal scheduling.
 - GeneralDriver free-running timecounter, read-only RTC registration, and
   alternating timer channels delivering real MI `hardclock()` ticks.
-- Empty process-pmap lifetime/reference operations. User translations are
-  still unsupported; supervisor mappings remain shared between LWPs.
+- Managed process pmaps with separate user roots, reference/lifetime operations,
+  reverse mappings, wiring/protection/removal and sticky access history.
+  Supervisor mappings remain shared; context switches select the user root.
+- Fault-aware `copyin/out`, string copies and integer fetch/store operations.
+- Validated integer get/setcontext and ptrace register access. Privileged SR
+  bits, invalid user PC/SP values and unsupported TLS/FPU contexts are rejected.
+- Per-LWP USP save/restore across real scheduler switches; new LWPs inherit
+  their saved user SP from the copied register frame.
+- Wired user I/O aliases through `vmapbuf/vunmapbuf`, with a 4 MiB physio map
+  and cleanup if a partially mapped request fails.
 - Real `kcopy()`/MMU-fault recovery integrated into normal kernel startup.
 
 Kernel VA is bounded by the prebuilt 256 MiB window. Kmem is capped at 128 MiB
@@ -55,6 +64,54 @@ alignment hook preserves assertions against that MD contract; other ports keep
 their existing object-size alignment requirement. Normal mutex storage also
 has explicit eight-byte alignment. Cache/SMP support must revisit this contract.
 
+## Managed user memory and hardware execution
+
+`kernel_pmap.c` allocates six-level user tables from UVM, never from sealed
+bootstrap memory. Each 2 KiB hardware table currently owns a full 64 KiB page;
+metadata after the table links ownership for destruction. This deliberately
+simple allocator retains intermediate tables until pmap destruction, including
+partially allocated trees after `PMAP_CANFAIL` failures. Packing tables and
+reclaiming empty branches are later memory optimizations. User leaf entries
+have no supervisor bit and cannot be installed outside the user address range.
+
+Reverse mappings link kernel and process aliases of each managed page, so
+page-wide protection and reference/modify history cover all tracked aliases.
+The high kernel window keeps preallocated PV slots; process PVs use nonblocking
+kmem allocation. Transactions serialize through the existing UP IRQ guards.
+No TLB exists in VMEmu with the instruction/data caches disabled; enabling
+caches, SMP or kernel preemption requires revisiting these assumptions.
+
+Supervisor loads/stores select MST, so `usercopy.c` walks the process pmap and
+copies through the supervisor physical direct map. Missing or insufficient
+permissions fault through real UVM, including demand-zero and COW allocation.
+Access bits are recorded on successful copies. User bounds, partial transfers,
+string terminators and zero-length semantics are checked. MI physio wires user
+pages before `vmapbuf`; the MD mapper adds/removes kernel aliases and restores
+the original buffer pointer. No storage/DMA driver has been added.
+
+The EARLY-only instruction probe copies position-independent machine code into
+a UVM page, protects it RX, switches MUT/USP and uses RTE to enter user mode.
+It checks user stack writes/reads, two SYSCALL traps and an RTE back to user mode,
+then returns to its supervisor caller. Further probes require actual hardware
+faults on a kernel VA, read-only text writes, NX data execution and privileged
+RTE. Probe vectors, MUT, USP, saved supervisor registers/status and IRQ guards
+are restored; a subsequent timer/CV check verifies clock delivery still works.
+This runs in a controlled test context with IRQs masked for the short user
+instruction sequences. It does not implement asynchronous process trap handling,
+syscall dispatch, signals or user scheduling.
+
+Integer context/ptrace conversions are exercised using GPRs captured by the
+actual user syscall probe, including rejected restores that must leave saved
+state unchanged. Supervisor stack/MMU/fault metadata are not writable through
+these interfaces. A sleeping main LWP and softclock LWP carry distinct hardware
+USPs, verified across the real MI wakeup/context-switch path. The context
+layout still needs wiring into production user trap entry/return and signals.
+
+The next process milestone needs a stable syscall/trap ABI, user fault
+and AST handling, exec/setregs and signal delivery, an executable format accepted
+by the toolchain/kernel, a root image and an initial program. RVM still has no
+registered ELF machine ID; no other architecture's ID has been borrowed.
+
 ## Compiler/object tools
 
 The maintained sibling GCC backend and installed NetBSD `cc1`/`lto1` now emit
@@ -62,7 +119,11 @@ aligned/unaligned `.quad` pointer initializers and honor explicit `.balign`.
 Their previous versions are backed up under
 `/tmp/rvm-netbsd-normal-toolchain-backup-20261107/`.
 The reproducible patch is `sys/arch/rvm/stand/toolchain/rvm-data-alignment.patch`.
-No VMEmu, VMAsm or installed linker changes were needed in this session.
+No VMEmu, VMAsm or installed linker changes were needed for the normal kernel
+or the subsequent managed-user-memory bring-up. The build helper fingerprints
+GCC, cc1, assembler, linker and VMAsm; a changed fingerprint invalidates both
+kernel and libkern objects, so an external GCC rebuild cannot silently reuse
+old generated code. Direct build.sh invocations do not add this fingerprint.
 
 The static-kernel compiler/link adapters scope private FHR symbols and resolve
 strong/weak definitions before the final link. They retain real alias identity,
@@ -83,6 +144,15 @@ root-device prompt, with no panic/fatal trap. The EARLY integration check uses
 real MI heap allocation, a recoverable null copy, hardware ticks, an MI callout
 running in softclock context and a CV wakeup. It also checks four-byte-aligned
 64-bit atomic load/store/CAS/add and the maximum pool bitmap boundary.
+
+User VM checks create real anonymous maps and require demand-zero reads, copies
+across page boundaries, partial-copy counts, strings, overflow/kernel/null
+address rejection, strings at the final byte of user VA, read-only failures,
+fork COW isolation, sparse high-address aliases, mapping replacement, wiring
+counts and reverse-page protection/removal. Eight repeated fork/fault/free
+cycles check that physical memory is returned, allowing a small pool-cache margin.
+The same boot test requires the hardware execution/protection probes and wired
+I/O alias/rollback checks described above.
 
 Both `EARLY` and `EARLY_DIAGNOSTIC` passed these checks at 64 and 640 MiB.
 The default helper completed a clean host-tool/kernel build using the installed
@@ -119,3 +189,26 @@ entry/return, user copy/access primitives, register/context/signal handling and
 an executable loader. Then attach an initial RAM filesystem containing init
 and a shell, and add a real tty/device path. The normal kernel still lacks fast
 softints/in-kernel preemption, cache/SMP support, and general device IRQ routing.
+
+## Continuation validation after the GCC rebuild
+
+The installed compiler passed the helper's ABI/data/alignment checks and a
+fresh normal kernel build in `/tmp/rvm-user-kernel`. The default output is
+rebuilt in `obj.rvm-kernel/netbsd.fhr`; `./run-kernel.sh` launches it. No sibling
+compiler, assembler, linker or VMEmu source/binary was modified in this
+continuation. All new port changes are in this repository.
+
+Validation logs for this continuation:
+
+- `/tmp/rvm-user-context-switch-build.log` and
+  `/tmp/rvm-user-context-switch-boot.log`: default EARLY build/boot checks.
+- `/tmp/rvm-user-context-diag-build.log` and
+  `/tmp/rvm-user-context-diag-boot.log`: EARLY_DIAGNOSTIC build/boot checks.
+- `/tmp/rvm-user-memory.log`: all 115 standalone memory-suite checks passed.
+- `/tmp/rvm-user-managedpmap.log`: all 12 standalone managed-pmap checks passed.
+- `/tmp/rvm-user-normal-tools.log`: all four object-tool execution cases passed.
+
+Both normal configurations require every new check and the root-device prompt
+at 64 and 640 MiB. The incremental build was also observed to rebuild only the
+changed smoke object and the usual version object when the tool fingerprint
+was unchanged; adding the fingerprint rebuilt kernel and libkern objects.

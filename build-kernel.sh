@@ -34,6 +34,32 @@ if not re.search(r'\.balign\s+65536', s) or not re.search(r'\.quad\s+target', s)
     sys.exit('Rebuild GCC with sys/arch/rvm/stand/toolchain/rvm-data-alignment.patch')
 PY
 
+# make cannot otherwise see an external GCC rebuild. Keep a content stamp so
+# both kernel and libkern objects are rebuilt when installed tools change.
+RVM_TOOLCHAIN_STAMP="$obj/toolchain.stamp"
+export RVM_TOOLCHAIN_STAMP
+python3 - "$toolchain/bin/rvm-netbsd-gcc" "$RVM_TOOLCHAIN_STAMP" <<'PY'
+import hashlib, os, shutil, subprocess, sys
+from pathlib import Path
+cc, stamp = sys.argv[1], Path(sys.argv[2])
+paths = [Path(cc)]
+for name in ('cc1', 'as', 'ld'):
+    program = subprocess.check_output([cc, '-print-prog-name='+name], text=True).strip()
+    path = Path(program) if '/' in program else Path(shutil.which(program) or program)
+    paths.append(path)
+paths.append(Path(shutil.which(os.environ.get('VMASM', 'VMAsm')) or 'VMAsm'))
+digest = hashlib.sha256()
+for path in paths:
+    digest.update(str(path.resolve()).encode())
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024*1024), b''):
+            digest.update(block)
+value = digest.hexdigest()+'\n'
+if not stamp.exists() or stamp.read_text() != value:
+    stamp.write_text(value)
+    print('RVM toolchain changed: rebuilding kernel and libkern objects')
+PY
+
 ./build.sh -m rvm -U -u -O "$obj" -T "$tools" \
     -V EXTERNAL_TOOLCHAIN="$toolchain" -V MKGDB=no makewrapper
 subset='host-mkdep compat binstall .WAIT date mktemp sed m4 yacc .WAIT lex .WAIT awk genassym lorder tsort mkdep cksum stat config'

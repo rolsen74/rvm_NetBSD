@@ -1,6 +1,6 @@
 /*
- * RVM supervisor pmap with managed kernel aliases and access tracking.
- * User pmaps and cache-enabled execution remain pending.
+ * RVM supervisor/user pmaps with managed aliases and access tracking.
+ * Cache-enabled execution remains pending.
  */
 #ifndef _RVM_PMAP_H_
 #define _RVM_PMAP_H_
@@ -23,6 +23,10 @@ struct pmap {
 	paddr_t pm_root;
 	struct pmap_statistics pm_stats;
 	unsigned int pm_refs;
+#ifdef RVM_KERNEL
+	struct rvm_pv_entry *pm_mappings;
+	void *pm_tables;
+#endif
 };
 
 #define RVM_BOOT_TEST_VA 0xffff800000000000UL

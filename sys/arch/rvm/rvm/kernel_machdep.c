@@ -20,6 +20,7 @@
 char machine[] = MACHINE;
 char machine_arch[] = MACHINE_ARCH;
 struct cpu_info cpu_info_primary;
+struct vm_map *phys_map;
 char rvm_boot_stack[RVM_BOOT_STACK_SIZE] __aligned(PAGE_SIZE);
 void (*rvm_boot_vectors[RVM_BOOT_NVECTORS])(void) __aligned(16);
 volatile unsigned long rvm_boot_stage;
@@ -73,8 +74,11 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 void
 cpu_startup(void)
 {
+	vaddr_t minaddr = 0, maxaddr;
 	(void)cpu_setmodel("RVM 64-bit virtual CPU");
 	banner();
+	phys_map = uvm_km_suballoc(kernel_map, &minaddr, &maxaddr,
+	    VM_PHYS_SIZE, 0, false, NULL);
 }
 
 void

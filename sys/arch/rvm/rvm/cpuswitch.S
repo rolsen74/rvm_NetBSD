@@ -25,6 +25,12 @@ cpu_switchto:
         xdef rvm_cpu_switch
 rvm_cpu_switch:
         pushm r10-r62
+#ifdef RVM_KERNEL
+        mfctrl usp,r5
+        move.q r5,(RVM_PCB_USP,r2)
+        move.q (RVM_PCB_USP,r3),r5
+        mtctrl r5,usp
+#endif
         move.q r63,(RVM_PCB_SP,r2)
         move.q r63,(RVM_PCB_SSP,r2)
         move.q (RVM_SWITCH_PC,r63),r5

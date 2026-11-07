@@ -39,6 +39,9 @@ NORMAL_S=@echo "assemble ${.TARGET}"; \
 %INCLUDES
 %OBJS
 ${OBJS}: ${RVM}/stand/kernel_cc.py ${RVM}/stand/fhr_asm.py
+.if defined(RVM_TOOLCHAIN_STAMP)
+${OBJS}: ${RVM_TOOLCHAIN_STAMP}
+.endif
 %CFILES
 %SFILES
 %LOAD

@@ -8,7 +8,8 @@
  * IMPORTANT: The virtual address ranges below are PROVISIONAL.
  * They assume the RVM MMU can translate these addresses and that
  * VMEmu and the kernel bootstrap agree on their interpretation.
- * User mode and managed user mappings are not implemented yet.
+ * Normal kernels implement managed user mappings; user executable startup
+ * and the process trap/signal ABI are still being brought up.
  */
 
 #ifndef _RVM_VMPARAM_H_

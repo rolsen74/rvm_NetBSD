@@ -7,11 +7,16 @@
 #define RVM_SWITCH_PC 424
 #define RVM_SWITCH_SIZE 432
 #define RVM_PCB_SP 504
+#define RVM_PCB_USP 512
 #define RVM_PCB_SSP 520
 #define RVM_PCB_PC 528
 #ifndef _LOCORE
 #include <sys/types.h>
 struct lwp;
+#ifdef RVM_KERNEL
+uint64_t rvm_get_user_sp(void);
+void rvm_set_user_sp(uint64_t);
+#endif
 int rvm_cpu_bootstrap_lwp(void);
 int rvm_cpu_lwp_prepare(struct lwp *, vaddr_t, vsize_t, void (*)(void *), void *);
 int rvm_cpu_lwp_discard(struct lwp *);

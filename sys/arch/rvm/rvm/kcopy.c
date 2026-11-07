@@ -49,7 +49,10 @@ int kcopy(const void *src, void *dst, size_t len)
 	    len - 1 > UINTPTR_MAX - (uintptr_t)dst) return EFAULT;
 	guard = rvm_intr_suspend();
 	if (!rvm_kcopy_ready() || cpu_intr_p() || curlwp != curcpu()->ci_onproc ||
-	    !(curlwp->l_flag & LW_SYSTEM) || curlwp->l_addr == NULL ||
+#ifndef RVM_KERNEL
+	    !(curlwp->l_flag & LW_SYSTEM) ||
+#endif
+	    curlwp->l_addr == NULL ||
 	    curlwp->l_md.md_pcb != curlwp->l_addr) panic(rvm_copy_bad);
 	pcb = lwp_getpcb(curlwp); oldfault = pcb->pcb_onfault;
 	pcb->pcb_onfault = rvm_kcopy_fault;

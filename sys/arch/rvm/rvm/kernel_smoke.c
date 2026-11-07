@@ -9,8 +9,10 @@
 #include <sys/cpu.h>
 #include <sys/atomic.h>
 #include <sys/pool.h>
+#include <machine/switch.h>
 
 void rvm_kernel_smoke(void);
+void rvm_user_smoke(void);
 #define CHECK(c) do { if (!(c)) panic("RVM normal kernel check: " #c); } while (0)
 
 struct smoke_state {
@@ -25,6 +27,7 @@ smoke_timeout(void *arg)
 {
 	struct smoke_state *state = arg;
 	CHECK(cpu_softintr_p());
+	CHECK(rvm_get_user_sp() == 0);
 	mutex_enter(&state->lock);
 	state->done = true;
 	cv_signal(&state->cv);
@@ -40,6 +43,7 @@ rvm_kernel_smoke(void)
 	struct pool byte_pool;
 	void *item;
 	int begin;
+	uint64_t oldusp;
 
 	small = kmem_zalloc(8, KM_SLEEP);
 	large = kmem_alloc(PAGE_SIZE + 37, KM_SLEEP);
@@ -66,11 +70,15 @@ rvm_kernel_smoke(void)
 	*(unsigned char *)item = 0x3c;
 	pool_put(&byte_pool, item);
 	pool_destroy(&byte_pool);
+	/* Clock/CV checks afterwards also verify the probe restored IRQ delivery. */
+	rvm_user_smoke();
 	memset(&state, 0, sizeof(state));
 	mutex_init(&state.lock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&state.cv, "rvmsmoke");
 	callout_init(&state.timer, CALLOUT_MPSAFE);
 	mutex_enter(&state.lock);
+	oldusp = rvm_get_user_sp();
+	rvm_set_user_sp(VM_MAXUSER_ADDRESS - 64);
 	begin = getticks();
 	callout_reset(&state.timer, 2, smoke_timeout, &state);
 	while (!state.done) {
@@ -78,6 +86,8 @@ rvm_kernel_smoke(void)
 			panic("RVM normal kernel: softclock/CV timeout");
 	}
 	CHECK((unsigned int)(getticks() - begin) >= 2);
+	CHECK(rvm_get_user_sp() == VM_MAXUSER_ADDRESS - 64);
+	rvm_set_user_sp(oldusp);
 	mutex_exit(&state.lock);
 	callout_halt(&state.timer, NULL);
 	callout_destroy(&state.timer);
@@ -86,4 +96,5 @@ rvm_kernel_smoke(void)
 	printf("RVM normal kernel: heap, kcopy, hardclock, softclock and CV wakeup verified\n");
 	printf("RVM normal kernel: four-byte-aligned 64-bit atomic operations verified\n");
 	printf("RVM normal kernel: 65536-item pool bitmap verified\n");
+	printf("RVM normal kernel: per-LWP user stack pointer switching verified\n");
 }

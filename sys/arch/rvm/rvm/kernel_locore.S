@@ -54,6 +54,18 @@ rvm_boot_get_sr:
 rvm_boot_get_cr:
         mfctrl cr,r0
         rts
+        xdef rvm_set_user_root
+rvm_set_user_root:
+        mtctrl r2,mut
+        rts
+        xdef rvm_get_user_sp
+rvm_get_user_sp:
+        mfctrl usp,r0
+        rts
+        xdef rvm_set_user_sp
+rvm_set_user_sp:
+        mtctrl r2,usp
+        rts
         xdef rvm_boot_enable_mmu
 rvm_boot_enable_mmu:
         mtctrl r2,mst

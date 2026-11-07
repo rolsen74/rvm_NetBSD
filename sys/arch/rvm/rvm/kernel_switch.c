@@ -15,6 +15,7 @@ struct lwp *rvm_cpu_switch(struct pcb *, struct pcb *, struct lwp *);
 void rvm_lwp_trampoline(void);
 void rvm_cpu_lwp_start(void (*)(void *), void *, struct lwp *);
 __CTASSERT(offsetof(struct pcb, pcb_gpr[63]) == RVM_PCB_SP);
+__CTASSERT(offsetof(struct pcb, pcb_usp) == RVM_PCB_USP);
 __CTASSERT(offsetof(struct pcb, pcb_ssp) == RVM_PCB_SSP);
 __CTASSERT(offsetof(struct pcb, pcb_pc) == RVM_PCB_PC);
 
@@ -32,6 +33,7 @@ cpu_lwp_fork(struct lwp *parent, struct lwp *child, void *stack __unused,
 	memset(pcb, 0, sizeof(*pcb));
 	memset(tf, 0, sizeof(*tf));
 	if (parent->l_md.md_tf != NULL) *tf = *parent->l_md.md_tf;
+	pcb->pcb_usp = tf->tf_usp;
 	memset(frame, 0, RVM_SWITCH_SIZE);
 	frame[0] = (uintptr_t)func;
 	frame[1] = (uintptr_t)arg;
@@ -52,6 +54,7 @@ cpu_switchto(struct lwp *old, struct lwp *new, bool returning __unused)
 	KASSERT(curcpu()->ci_cpl >= IPL_SCHED);
 	rvm_intr_disable();
 	curcpu()->ci_curlwp = new;
+	pmap_activate(new);
 	return rvm_cpu_switch(old->l_addr, new->l_addr, old);
 }
 

@@ -26,6 +26,12 @@ required = (
     'RVM normal kernel: heap, kcopy, hardclock, softclock and CV wakeup verified',
     'RVM normal kernel: four-byte-aligned 64-bit atomic operations verified',
     'RVM normal kernel: 65536-item pool bitmap verified',
+    'RVM normal kernel: per-LWP user stack pointer switching verified',
+    'RVM normal kernel: user pmaps, demand-zero, copies, protection and COW verified',
+    'RVM normal kernel: user-mode execution, user stack and syscall/RTE roundtrip verified',
+    'RVM normal kernel: user kernel isolation, read-only text, NX and privilege faults verified',
+    'RVM normal kernel: wired user I/O buffers and partial mapping rollback verified',
+    'RVM normal kernel: integer contexts, ptrace registers and privileged-state rejection verified',
     'root device:',
 )
 for memory in args.ram_mib:
@@ -51,5 +57,5 @@ for memory in args.ram_mib:
         for marker in required:
             assert marker in output, 'Missing '+marker+'\n'+output[-10000:]
         assert 'panic:' not in output and 'fatal kernel exception' not in output, output[-10000:]
-        print(f'PASS: normal MI kernel, heap/copy/timer/CV checks and root prompt ({memory} MiB)',
+        print(f'PASS: normal MI kernel, user VM/mode/I/O checks and root prompt ({memory} MiB)',
               flush=True)

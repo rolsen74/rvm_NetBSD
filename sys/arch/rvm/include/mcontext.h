@@ -1,4 +1,4 @@
-/* Initial integer context layout; get/setcontext and signals are not active. */
+/* Integer context layout. Process trap/signal entry is still being brought up. */
 #ifndef _RVM_MCONTEXT_H_
 #define _RVM_MCONTEXT_H_
 

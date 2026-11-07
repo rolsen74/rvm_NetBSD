@@ -5,8 +5,11 @@ The normal MI kernel now builds with NetBSD `config(8)` and BSD make, enters
 attaches `mainbus0`/`cpu0`, and reaches the root-device prompt in VMEmu.
 The `EARLY` configuration includes an integration check of real heap allocation,
 recoverable kernel copies, hardclock/softclock delivery and CV wakeup before
-asking for a root device. User mappings, executable loading, user traps/signals,
-a root filesystem and a tty driver are still missing. This is not a shell boot.
+asking for a root device. Managed user mappings, UVM demand-zero/COW faults,
+user copies and wired I/O aliases now work. A controlled hardware test executes
+user code and verifies syscall/RTE, kernel isolation, NX and privilege faults.
+Executable loading, the process syscall/trap/signal ABI, a root filesystem and
+a tty driver are still missing. This is not a shell boot.
 
 ```sh
 ./build-kernel.sh
@@ -26,8 +29,9 @@ python3 sys/arch/rvm/tests/kernel_boot.py
 python3 sys/arch/rvm/tests/normal_tools.py
 ```
 
-`EARLY` explicitly links temporary user-mode boundaries: user memory accesses
-fail, and unimplemented execution transitions stop with a named panic.
+`EARLY` explicitly links temporary boundaries for the remaining process
+interfaces; unimplemented execution transitions stop with a named panic.
+User-memory copying and mapping are real implementations shared with `GENERIC`.
 `GENERIC` excludes those temporary boundaries and cannot link yet. The normal
 kernel uses slow MI softints and cooperative kernel scheduling; the standalone
 harness also exercises its separate timer-preemption path. Keyboard console

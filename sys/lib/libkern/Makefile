@@ -17,6 +17,10 @@ libinstall::
 .undef DESTDIR
 .include <bsd.lib.mk>
 
+.if ${MACHINE_ARCH} == "rvm64" && defined(RVM_TOOLCHAIN_STAMP)
+${OBJS}: ${RVM_TOOLCHAIN_STAMP}
+.endif
+
 lib${LIB}.o:: ${OBJS:O} __buildstdlib
 
 lib${LIB}.po:: ${POBJS:O} __buildproflib
