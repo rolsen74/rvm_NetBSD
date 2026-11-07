@@ -31,14 +31,24 @@ Uptime and LWP runtime use the GenericDriver free-running clock; the host
 RTC initializes UTC, and monotonic deadlines support timed kernel-LWP sleep.
 Non-interruptible MI condition variables, wait-channel wakeup and kernel pause
 now release/reacquire interlocks through real MI sleep queues and callout timeouts.
+Generic MI software interrupts now dispatch on four guarded kernel LWP stacks;
+an optional dedicated softclock LWP runs MI callouts and wakes CV sleepers.
+Managed kernel mappings now track every dynamic alias, retain hardware read/write
+history, support unwired entries and revoke permissions across all aliases.
+The corrected GCC argument ABI also enables NetBSD's real format parser,
+stacked `printf` arguments and bounded `snprintf` buffers.
 It does not yet enter kernel `main()`, initialize full UVM km and object pagers,
 or run user processes.
 `build.sh -m rvm` is not integrated yet.
 
 ## Build and run
 
-Install your updated RVM GCC toolchain before building. This repository
-uses the installed cross compiler directly. The build runs a small codegen
+Install your updated RVM GCC/binutils toolchain before building. The local
+[toolchain notes](stand/toolchain/README.md) include the caller-home/stack/varargs
+patch and the FHR undefined-symbol diagnostic patch. A clean rebuild is required
+when changing the argument ABI.
+
+This repository uses the installed cross compiler directly. The build runs a small codegen
 probe and rejects compilers that can destroy flags between a comparison and
 its branch or crash on widening multiplication at `-O2`.
 
@@ -183,6 +193,11 @@ RVM MI condition timeouts ready; timeout and early-signal cancellation verified.
 RVM MI kernel pause ready; timed sleep and interlock reacquisition verified.
 RVM MI wait channels ready; wakeup, timeout and no-relock verified.
 RVM MI bintime waits ready; timeout conversion and remaining time verified.
+RVM MI software interrupts ready; priority, coalescing and LWP dispatch verified.
+RVM MI softclock LWP ready; IRQ callouts and CV wakeups verified.
+RVM MI printf ready; stack arguments, precision and bounded buffers verified.
+RVM managed pmap ready; aliases, read/write tracking and page protection verified.
+RVM kernel copies ready; MMU fault return and PCB recovery verified.
 ```
 
 Addresses and condition-code bits can vary. After printing, the CPU halts
@@ -218,7 +233,12 @@ and timed LWP sleep with early-wake cancellation. Stages 38 through 41 add
 asynchronous hardclock/catchup, MI timer preemption, full busy GPR/SP return,
 and guarded heap/callout/RTC services with asynchronous sleepers. Stages 42–46
 add MI condition-variable handoff, CV timeout/cancellation, kernel pause,
-wait-channel wakeup/no-relock, and bintime-based waits.
+wait-channel wakeup/no-relock, and bintime-based waits. Stages 47 and 48 add
+generic MI software interrupts and timer-driven callouts on a softclock LWP.
+Stage 49 checks the real MI formatter when the compiler advertises the corrected
+argument ABI; stage 50 checks managed kernel aliases, hardware access history
+and page-wide permission revocation. Stage 51 verifies kernel copying and
+return from an expected supervisor MMU fault through RTE.
 A fatal exception sets it to
 `0xff`, reports the hardware vector,
 frame version, saved PC and low SR flags, then halts. All 63 non-SP integer
@@ -251,12 +271,14 @@ Current toolchain workarounds are confined to this port:
   current GNU FHR tools can lose. Constant merging is disabled.
 - VMAsm emits the standard `kernel_pmap_ptr` constant in read-only data because
   GCC's RVM backend cannot yet emit symbolic pointer initializers.
-- VMAsm captures the seven register arguments for early `printf`/`panic`.
-  GCC's incoming variadic spills and outgoing stacked-argument frames are
-  incomplete. Early diagnostics support `%s`, `%d`, `%u`, `%x`, `l`/`ll`
-  integer modifiers and `%%`, with up to seven arguments after the format.
-  These cover the MI physseg diagnostics; general printf and stacked
-  arguments are not supported yet.
+- With older GCC builds, VMAsm captures seven register arguments for early
+  `printf`/`panic`, supporting `%s`, `%d`, `%u`, `%x`, `l`/`ll` and `%%`.
+  GCC with `__RVM_CALLER_ARG_HOME__=64` saves incoming varargs and reserves
+  outgoing stack arguments correctly. That compiler selects real MI `kprintf`,
+  `snprintf` and `vsnprintf` bodies, with guarded console/panic wrappers and no
+  logging/tty dependencies. All assembly calls into C reserve its 64-byte
+  caller home area. Both compiler ABIs remain buildable; C objects from the
+  two ABIs must not be mixed.
 - `stand/fhr_asm.py` normalizes GCC's assembly for the MI sources: it promotes
   `.LC` strings to named symbols and converts common/BSS storage to explicit
   zero-filled data. The installed FHR tools lose
@@ -292,14 +314,17 @@ Bootstrap preallocates its table paths, leaving the leaf entries unmapped.
 now implement NetBSD's kernel mapping interfaces. Replacement does not change
 mapping counts; protection only removes permissions. Mapping edits are limited
 to this window so they cannot accidentally unmap the running bootstrap.
-All current mappings are wired, supervisor-only and uncached. Only cache flags
-zero and `PMAP_NOCACHE` are accepted. Invalid mapping edits halt with a
+`pmap_kenter_pa()` mappings remain wired; `pmap_enter()` also supports unwired
+managed mappings and `pmap_unwire()` updates their wiring counts. All mappings
+remain supervisor-only and uncached. Cache flags zero and `PMAP_NOCACHE` are
+accepted. Invalid mapping edits halt with a
 diagnostic. Tables remain allocated when mappings are removed.
 
 With CR equal to 8, VMEmu walks the page tables for each access and has no
 separate TLB. `pmap_update` checks that mode and supplies a compiler barrier.
-Cache-enabled execution, interrupts, SMP, user pmaps, managed-page/PV tracking,
-and the rest of the MI pmap API remain unimplemented.
+Cache-enabled execution, SMP, user pmaps and the remaining process-pmap API
+remain unimplemented. Mapping mutations and access-history operations now use
+IRQ guards, including when called with the asynchronous timer enabled.
 
 ## UVM physical preload
 
@@ -442,7 +467,7 @@ The fixed map-entry store avoids depending on a heap or sleep support. Full kern
 builds exclude the harness and must use normal UVM startup and kernel allocators.
 Startup verifies a two-page buffer, then aligned MI wired and VA-only
 allocations, the bootstrap heap, MI pools, pool caches and anonymous pages,
-reaching stage 46 and printing:
+as part of the sequence leading to stage 51 and printing:
 
 ```text
 Early wired allocator ready; zeroed allocation/free verified.
@@ -482,6 +507,11 @@ RVM MI condition timeouts ready; timeout and early-signal cancellation verified.
 RVM MI kernel pause ready; timed sleep and interlock reacquisition verified.
 RVM MI wait channels ready; wakeup, timeout and no-relock verified.
 RVM MI bintime waits ready; timeout conversion and remaining time verified.
+RVM MI software interrupts ready; priority, coalescing and LWP dispatch verified.
+RVM MI softclock LWP ready; IRQ callouts and CV wakeups verified.
+RVM MI printf ready; stack arguments, precision and bounded buffers verified.
+RVM managed pmap ready; aliases, read/write tracking and page protection verified.
+RVM kernel copies ready; MMU fault return and PCB recovery verified.
 ```
 
 The emulator tests additionally cover multi-page zeroing, exact ownership,
@@ -1583,7 +1613,7 @@ interlock ownership and exact page/map restoration. A capacity test runs all
 sixteen worker slots with overlapping MI/MD timeouts and guarded/plain u-areas.
 The same waits are tested with the legacy explicit HALT clock. Rejection cases
 cover invalid ownership, context, timeout and CV lifetime. The final 640 MiB
-image reaches stage 46, then stops the clock and halts as before.
+image reaches stage 51, then stops the clock and halts as before.
 
 A separate sustained test runs four producers and four consumers through a
 bounded message ring using real CV waits, broadcast, timed waits, kernel pause,
@@ -1596,11 +1626,117 @@ python3 sys/arch/rvm/tests/bootstrap.py --objdir obj.rvm-bootstrap \
     --suite waitstress --stress-seconds 120
 ```
 
-Next, implement normal scheduler/LWP exit initialization, additional device IRQ
-dispatch and normal softint startup, alongside the remaining normal kernel
-initialization dependencies.
-Object pagers, managed mapping/PV
-tracking and the remaining pmap API also remain necessary. Add kernel
+## Generic MI software interrupts and softclock
+
+`rvm_softint_init()` initializes the MI UP slow-softint implementation after
+scheduler/idle startup. Each of the four levels has a dedicated guarded LWP
+stack; these LWPs sleep off the normal run queues. The unchanged MI
+`softint_schedule()`, `softint_execute()`, `softint_thread()` and
+`softint_picklwp()` bodies provide FIFO queues, pending-request coalescing,
+callback rescheduling and serial/net/bio/clock priority selection. Ordinary
+kernel builds must use the complete `kern_softint.c` startup instead of this
+standalone compilation profile.
+
+The public establish/schedule/disestablish APIs support local-CPU MPSAFE
+handlers. There are 63 client slots. Establish/disestablish require normal
+LWP context without locks; scheduling is also valid from hardware IRQs and
+callbacks. The UP disestablish barrier drains a pending callback before its
+record can be reused. Invalid cookies, unsupported flags and invalid contexts
+stop with a diagnostic before queue mutation. Softint handlers must release
+all locks and IRQ guards before returning; blocking callbacks, the big kernel
+lock, remote CPUs and user ASTs remain unsupported.
+
+`rvm_callout_softint_start()` optionally routes hardclock scheduling to a real
+SOFTINT_CLOCK handler. MI `callout_softclock()` then executes on its own LWP
+stack, with the existing bounded IRQ guard around callout dispatch. Timer IRQ
+return services pending softints even when ordinary timer preemption is disabled.
+The earlier synchronous callout profile remains available before softint startup
+and after `rvm_callout_softint_stop()`. Stop the clock and drain/disestablish the
+softclock handler before final softint teardown. `rvm_softint_fini()` refuses
+live handlers and active work, and releases all four u-areas; scheduler teardown
+refuses live softint state. Partial stack-allocation failure rolls back every
+allocation before publishing per-CPU state.
+
+The default `make -f sys/arch/rvm/Makefile.bootstrap test` now exercises this
+milestone. `TEST_SUITE=wait` selects the earlier CV/sleep-queue checks, and
+`TEST_SUITE=full` runs all regressions. Focused softint tests cover priority,
+FIFO, coalescing, callback rescheduling, handler capacity, disestablishment,
+busy-C IRQ delivery, softclock CV wakeups, repeated teardown, allocation-failure
+rollback and exact page/map restoration at 16/64 MiB. A sustained eight-worker
+message/CV/timeout test uses the dedicated MI softclock:
+
+```sh
+python3 sys/arch/rvm/tests/bootstrap.py --objdir obj.rvm-bootstrap \
+    --cross rvm-netbsd- --vmemu "$PWD/../rvm_VMEmu/bin/VMEmu_linux_SDL2" \
+    --suite softintstress --stress-seconds 120
+```
+
+## Managed kernel mappings and hardware access history
+
+Each managed page now has an MD reverse-map head and sticky reference/modified
+history, initialized by MI physical-page setup. A fixed table provides one PV
+record per page in the preallocated 256 MiB kernel VM window (4096 records,
+128 KiB). The per-page list uses constant-time insertion/removal and requires no
+allocation while changing mappings. Kernel `pmap_enter()` supports managed wired
+and unwired entries, access-type hints and replacement; `pmap_unwire()` updates
+wiring independently of residency. Existing `pmap_kenter_pa()` aliases are also
+tracked when they refer to managed pages. Freeing a page with a live alias is
+rejected before the page can be recycled.
+
+`pmap_is_referenced()`, `pmap_is_modified()`, `pmap_clear_reference()` and
+`pmap_clear_modify()` combine sticky state with VMEmu's hardware PTE bits from
+all dynamic aliases and the temporary RAM identity mapping. Removing or
+replacing an alias harvests its bits first. Clearing references preserves dirty
+history while clearing hardware write bits, so a later write is visible as a
+new reference. `pmap_page_protect()` downgrades or removes every dynamic alias;
+it preserves the bootstrap identity map, whose permissions remain independent.
+User address spaces, page-table reclamation, cached execution and SMP are still
+outside this implementation.
+
+`--suite allocations` runs the ten earlier allocator fixtures directly.
+The default VM observation time is five seconds; `--timeout` changes it for
+ordinary cases while explicitly timed clock/stress cases retain their deadlines.
+Large-RAM boots retain a five-second minimum because page-metadata setup scales
+with RAM size.
+
+`--suite managedpmap` checks alias replacement, list head/middle/tail removal,
+the final kernel-window slot, R/M harvesting and clears, wiring, real IRQ use,
+page-wide protection faults, invalid inputs and exact cleanup at 16/64 MiB.
+The full-image RAM smoke checks now start at 4 MiB; focused allocator exhaustion
+checks remain separate. A 1 MiB image may be rejected by the FHR loader before
+entering C because relocated sections and the private stack exceed RAM.
+
+## Fault-recovering kernel copies
+
+`kcopy()` now copies kernel memory through an assembly loop with a scoped
+`pcb_onfault` recovery cookie. It saves and restores the previous cookie,
+supports overlapping regions, handles zero length and rejects address-range
+wraparound. Supervisor MMU read, write and invalid-mapping exceptions save all
+63 non-SP GPRs and enter a checked dispatcher. Only faults at the four guarded
+copy load/store instructions, with the expected cookie, frame version, MMU root
+and a valid current-LWP stack, can return through RTE to the EFAULT continuation.
+Other faults retain the existing fatal diagnostic path. Physical-bus faults,
+user traps, `copyin`/`copyout`, demand paging and signal delivery remain pending.
+
+The copy runs under the current LWP's IRQ guard and does not sleep. This is a
+bootstrap kernel-memory service; full kernel integration must revisit latency
+for long copies and add normal VM-fault resolution. `rvm_trap_init()` installs
+the MMU recovery entries alongside the supervisor software-trap handler.
+Stage 51 checks successful copying, actual MMU fault return and restoration of
+a pre-existing PCB handler.
+
+`--suite kcopy` tests both copy directions, overlap, zero length, overflow,
+read/write permission failures, partial copies across an unmapped page,
+R10–R62 and stack preservation, per-LWP cookies under the MI scheduler and
+asynchronous timer, and exact memory cleanup at 16/64 MiB. Corrupt recovery
+frames and a fault outside the copy instructions remain fatal. The full suite
+also reruns the existing supervisor trap and MMU protection regressions with
+the new entries installed.
+
+Next, implement normal scheduler/LWP creation and exit initialization, additional
+device IRQ dispatch and complete kernel softint startup, alongside the remaining
+normal kernel initialization dependencies.
+Object pagers, user pmaps and the remaining pmap API also remain necessary. Add kernel
 build glue, remaining machine interfaces, complete device priority mapping
 and `mainbus` support to reach
 `kern/init_main.c:main()`. The policy in `vmparam.h` remains provisional.

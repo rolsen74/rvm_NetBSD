@@ -13,5 +13,7 @@ int rvm_bootclock_verify(void);
 int rvm_callout_cpu_init(void);
 void rvm_callout_poll(void);
 int rvm_callout_busy(void);
+int rvm_callout_softint_start(void);
+int rvm_callout_softint_stop(void);
 void rvm_bootclock_ticktock(void);
 #endif

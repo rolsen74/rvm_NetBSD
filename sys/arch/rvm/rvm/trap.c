@@ -1,4 +1,4 @@
-/* Returning supervisor trap path. IRQs, user syscalls and faults stay fatal. */
+/* Supervisor trap return and scoped kernel-copy MMU-fault recovery. */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/lwp.h>
@@ -9,6 +9,7 @@
 #include <machine/frame.h>
 #include <machine/switch.h>
 #include <machine/trap.h>
+#include <machine/bootcopy.h>
 
 static unsigned long calls __attribute__((section(".data"))) = 0;
 static unsigned int active __attribute__((section(".data"))) = 0;
@@ -20,11 +21,11 @@ rvm_trap_init(void)
 {
 	if (rvm_boot_get_cr() != RVM_CR_MMU || cpu_intr_p() ||
 	    curcpu()->ci_cpl != IPL_NONE || !rvm_cpu_bootstrap_lwp()) return 0;
-	if (installed) return rvm_boot_vectors[RVM_VECTOR_SYSCALL] == rvm_supervisor_entry;
+	if (installed) return rvm_boot_vectors[RVM_VECTOR_SYSCALL] == rvm_supervisor_entry && rvm_kcopy_ready();
 	rvm_boot_vectors[RVM_VECTOR_SYSCALL] = rvm_supervisor_entry;
 	__asm volatile("" ::: "memory");
 	installed = 1;
-	return 1;
+	return rvm_kcopy_init();
 }
 
 unsigned long rvm_trap_count(void) { return calls; }

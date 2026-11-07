@@ -1,5 +1,6 @@
 /* INTE, CR, all non-SP GPRs, then the version-0 hardware frame. */
 #define _LOCORE
+#include <machine/asm.h>
 #include <machine/psl.h>
         section ".text",code
         SecAlign 4
@@ -41,9 +42,21 @@ rvm_async_interrupt_entry:
         rclr.q r0
         mtctrl r0,inte
         move.q r63,r2
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_async_irq_dispatch
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         move.q r63,r2
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_async_irq_return
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         popm r1
         popm r0
         /* Neither timer line can nest in the restore window. RTE restores

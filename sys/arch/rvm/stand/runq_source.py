@@ -19,6 +19,7 @@ header = '''
 #define BITMAP_MSB 0x80000000U
 #define BITMAP_MASK (BITMAP_BITS - 1)
 #define sched_rrticks 1
+const int schedppq = 1;
 static void rvm_queue_hook(struct lwp *l __unused) { }
 #define sched_newts rvm_queue_hook
 #define sched_oncpu rvm_queue_hook

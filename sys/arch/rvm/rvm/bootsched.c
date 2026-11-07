@@ -13,6 +13,7 @@
 #include <machine/clock.h>
 #include <machine/asyncirq.h>
 #include <machine/bootwait.h>
+#include <machine/bootsoftint.h>
 #include <uvm/uvm.h>
 #include <machine/boot.h>
 #include <machine/psl.h>
@@ -132,7 +133,7 @@ rvm_bootsched_fini(void)
 	unsigned int i;
 	if (!mode_ok() || owner == NULL || curlwp != owner || rvm_clock_active() ||
 	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_mtx_count != 0 ||
-	    curcpu()->ci_schedstate.spc_count != 0 || curcpu()->ci_schedstate.spc_mcount != 0 ||
+	    rvm_softint_ready() || curcpu()->ci_schedstate.spc_count != 0 || curcpu()->ci_schedstate.spc_mcount != 0 ||
 	    mutex_owned(&sched_lock) || mutex_owned(&worker_lock)) return 0;
 	for (i = 0; i < MAX_WORKERS; i++) if (members[i] != NULL) return 0;
 	if (curcpu()->ci_data.cpu_idlelwp != NULL) {
@@ -174,7 +175,7 @@ handoff(struct lwp *next, int exiting)
 	    next->l_addr == NULL || next->l_md.md_pcb != next->l_addr ||
 	    (next->l_proc == NULL && next != owner) ||
 	    (next->l_proc != NULL && next->l_proc->p_vmspace != NULL) ||
-	    curcpu()->ci_data.cpu_softints != 0 || (exiting && self == owner))
+	    (exiting && self == owner))
 		panic(rvm_sched_bad);
 	rvm_bootsched_vmcheck(self);
 	if (next->l_md.md_startup == 1 && next->l_stat == LSIDL && next != owner) {
@@ -294,7 +295,6 @@ runqueue_switch(int action)
 	    self->l_nopreempt != 0 || self->l_lwpctl != NULL ||
 	    self->l_blcnt != 0 || self->l_target_cpu != NULL ||
 	    (self->l_pflag & (LP_INTR | LP_PREEMPTING)) || self->l_class != SCHED_OTHER ||
-	    curcpu()->ci_data.cpu_softints != 0 ||
 	    (exiting && self == owner) ||
 	    ((exiting || sleeping) && curcpu()->ci_schedstate.spc_count == 0 &&
 	    curcpu()->ci_data.cpu_idlelwp == NULL))
@@ -664,9 +664,9 @@ rvm_bootsched_preempt(void)
 	if (!mode_ok() || owner == NULL || !rvm_async_clock_active() ||
 	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_irq_locks != 0 ||
 	    curcpu()->ci_mtx_count != 0 || rvm_bootclock_busy() ||
-	    curlwp == NULL || (curlwp->l_flag & LW_IDLE) ||
+	    curlwp == NULL || (curlwp->l_flag & LW_IDLE) || (curlwp->l_pflag & LP_INTR) ||
 	    curlwp->l_nopreempt != 0 || !curcpu()->ci_want_resched) return;
-	if (curcpu()->ci_schedstate.spc_count == 0) {
+	if (curcpu()->ci_schedstate.spc_count == 0 && !rvm_softint_pending()) {
 		curcpu()->ci_want_resched = 0;
 		return;
 	}
@@ -742,4 +742,28 @@ void rvm_wait_switch(struct lwp *l)
 	    curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_mtx_count != 0 ||
 	    curcpu()->ci_irq_locks != 0 || l->l_wchan != NULL || l->l_sleepq != NULL)
 		panic(rvm_sched_bad);
+}
+
+/* Generic slow-softint LWPs sleep off the run queues between deliveries. */
+void rvm_softint_lwp_lock(struct lwp *l)
+{
+	unsigned int g = rvm_intr_suspend();
+	if (!mode_ok() || !rvm_softint_member(l) || l != curlwp ||
+	    g != 0 || curcpu()->ci_cpl != IPL_NONE || curcpu()->ci_irq_locks != 0 ||
+	    curcpu()->ci_mtx_count != 0 || l->l_stat != LSONPROC ||
+	    l->l_mutex != &worker_lock || !(l->l_pflag & LP_RUNNING)) panic(rvm_sched_bad);
+	curcpu()->ci_mtx_oldspl = IPL_NONE;
+	mutex_spin_enter(&worker_lock);
+}
+void rvm_softint_switch(struct lwp *l)
+{
+	if (!mode_ok() || !rvm_softint_member(l) || l != curlwp ||
+	    l->l_stat != LSIDL || curcpu()->ci_cpl != IPL_SCHED ||
+	    curcpu()->ci_mtx_count != 0 || curcpu()->ci_irq_locks != 2 ||
+	    !mutex_owned(&worker_lock) || !mutex_owned(&sched_lock)) panic(rvm_sched_bad);
+	curcpu()->ci_mtx_count = -2;
+	mi_switch(l);
+	if (l != curlwp || l->l_stat != LSONPROC || curcpu()->ci_cpl != IPL_NONE ||
+	    curcpu()->ci_mtx_count != 0 || curcpu()->ci_irq_locks != 0) panic(rvm_sched_bad);
+	rvm_intr_resume(0);
 }

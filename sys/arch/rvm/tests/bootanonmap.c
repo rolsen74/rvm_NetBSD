@@ -60,7 +60,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	int entries;
 
 	rvm_normal_early_init(bi);
-	REQUIRE(rvm_boot_stage == 20);
+	REQUIRE(rvm_boot_stage == 32);
 	before = curcpu()->ci_counts[CPU_COUNT_FREEPAGES];
 	dirty = curcpu()->ci_counts[CPU_COUNT_ANONDIRTY];
 	resident = pmap_resident_count(pmap_kernel());

@@ -12,6 +12,7 @@
 #include <machine/generic.h>
 #include <machine/bootclock.h>
 #include <machine/asyncirq.h>
+#include <machine/bootsoftint.h>
 
 static unsigned int phase __attribute__((section(".data"))) = 0;
 static unsigned int halted __attribute__((section(".data"))) = 0;
@@ -190,6 +191,7 @@ rvm_clock_stop(void)
 
 /* Asynchronous clock: independent from the legacy explicit-wait API. */
 #include <machine/asyncirq.h>
+#include <machine/bootsoftint.h>
 #include <machine/clock.h>
 #include <machine/boottime.h>
 #include <machine/bootsched.h>
@@ -308,7 +310,7 @@ rvm_async_irq_return(struct rvm_async_irqframe *af)
 	if (l->l_md.md_irq_hold == 1 && curcpu()->ci_cpl == IPL_NONE &&
 	    curcpu()->ci_irq_locks == 0 && l->l_nopreempt == 0 && !async_stopping) {
 		rvm_bootclock_poll();
-		if (async_preempt) rvm_bootsched_preempt();
+		if (async_preempt || rvm_softint_pending()) rvm_bootsched_preempt();
 	}
 	if (curlwp != l || l->l_md.md_irq_hold == 0 || rvm_boot_get_cr() != RVM_CR_MMU)
 		panic(rvm_async_bad);

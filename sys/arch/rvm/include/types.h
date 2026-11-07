@@ -17,6 +17,7 @@
 #include <machine/int_types.h>
 
 #define __HAVE_CPU_UAREA_ROUTINES 1
+#define __HAVE_VM_PAGE_MD 1
 
 /*
  * RVM currently targets a 64-bit LP64 ABI.

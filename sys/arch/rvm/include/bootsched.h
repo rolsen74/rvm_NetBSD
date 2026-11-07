@@ -1,4 +1,4 @@
-/* Standalone cooperative MI scheduling; hardware preemption remains pending. */
+/* Standalone UP MI scheduling, timer preemption and generic softint handoff. */
 #ifndef _RVM_BOOTSCHED_H_
 #define _RVM_BOOTSCHED_H_
 #include <sys/types.h>

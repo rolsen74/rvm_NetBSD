@@ -39,7 +39,7 @@ struct cpu_info
 	struct lwp *		  ci_onproc; /* currently running LWP */
 	volatile unsigned int ci_intr_depth;
 	int					  ci_cpl; /* current interrupt priority */
-	int					  ci_want_resched;
+	unsigned int ci_want_resched;
 	unsigned int ci_irq_locks; /* IRQ-off checked mutexes held on this CPU */
 	int ci_mtx_oldspl;
 	int ci_mtx_count; /* MI scheduler spin-lock handoff count */
@@ -55,6 +55,7 @@ struct cpu_info
  * must replace that bootstrap-only definition.
  */
 extern struct cpu_info cpu_info_primary;
+void cpu_signotify(struct lwp *);
 void *cpu_uarea_alloc(bool);
 bool cpu_uarea_free(void *);
 

@@ -46,7 +46,7 @@ struct pcb
 	uint64_t pcb_mmu_table;
 	uint64_t pcb_sr;
 
-	/* Used to recover from expected kernel access faults (copyin/out). */
+	/* Scoped kernel kcopy recovery; user copyin/copyout still need support. */
 	void * pcb_onfault;
 };
 #endif /* !_LOCORE */

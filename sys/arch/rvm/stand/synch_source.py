@@ -2,7 +2,9 @@
 """Select unchanged MI switch/next-LWP/preempt bodies for UP scheduling.
 
 Run queues use selected real UP operations. Hardware timer return can
-preempt supervisor LWPs; normal softint LWPs and tracing remain unavailable. Normal kernel builds link kern_synch.c instead.
+preempt supervisor LWPs; the generic slow-softint picker uses guarded LWPs.
+Tracing and normal scheduler startup remain unavailable. Normal kernel builds
+link kern_synch.c instead.
 """
 from pathlib import Path
 import sys
@@ -29,8 +31,6 @@ header = '''
 #define MUTEX_SPIN_OLDSPL(ci) ((ci)->ci_mtx_oldspl)
 #define dtrace_vtime_active 0
 #define dtrace_vtime_switch_func rvm_no_lwp
-static struct lwp *rvm_no_softint(void)
-{ rvm_bootsched_unavailable(); }
 static void rvm_no_lwp(struct lwp *l __unused)
 { rvm_bootsched_unavailable(); }
 static void __dead rvm_backwards_time(void)
@@ -42,8 +42,7 @@ static void __dead rvm_backwards_time(void)
 #define snprintf(buf, len, fmt, ...) ((void)(buf), rvm_backwards_time())
 #define printf(...) rvm_backwards_time()
 
-#define softint_picklwp rvm_no_softint
-#define softint_block rvm_no_lwp
+#include <sys/intr.h>
 #define sched_nextlwp rvm_bootsched_pick
 #define lwp_unlock rvm_bootsched_lwp_unlock
 #define binuptime rvm_bootclock_binuptime

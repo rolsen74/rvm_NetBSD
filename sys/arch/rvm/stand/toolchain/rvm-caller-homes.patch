@@ -1,0 +1,274 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -136,58 +136,6 @@
+ 	return true;
+ }
+ 
+-static HOST_WIDE_INT
+-rvm_incoming_reg_arg_home_size ( void )
+-{
+-	tree		  arg;
+-	int			  regno;
+-	HOST_WIDE_INT size;
+-	HOST_WIDE_INT total;
+-
+-	total = 0;
+-	regno = RVM_R2;
+-
+-	for ( arg = DECL_ARGUMENTS ( current_function_decl ); arg; arg = DECL_CHAIN ( arg ) )
+-	{
+-		tree type;
+-		int	 arg_size;
+-		int	 reg_words;
+-
+-		type = TREE_TYPE ( arg );
+-		if ( ! type )
+-		{
+-			continue;
+-		}
+-
+-		arg_size = int_size_in_bytes ( type );
+-		if ( arg_size <= 0 )
+-		{
+-			continue;
+-		}
+-
+-		reg_words = ( arg_size + UNITS_PER_WORD - 1 ) / UNITS_PER_WORD;
+-		if ( reg_words <= 0 )
+-		{
+-			reg_words = 1;
+-		}
+-
+-		if ( regno > RVM_R9 )
+-		{
+-			break;
+-		}
+-
+-		if ( regno + reg_words - 1 > RVM_R9 )
+-		{
+-			break;
+-		}
+-
+-		total += arg_size;
+-		regno += reg_words;
+-	}
+-
+-	return total;
+-}
+-
+ /* Emit an error message when we're in an asm, and a fatal error for
+ 	 "normal" insns.  Formatted output isn't easily implemented, since we
+ 	 use output_operand_lossage to output the actual message and handle the
+@@ -593,113 +541,76 @@
+ // 			 ? (HOST_WIDE_INT) crtl->outgoing_args_size : 0);
+ // }
+ 
++/* PUSHF saves its mask, the selected registers, and establishes R62. */
++static uint64_t
++rvm_frame_save_mask (void)
++{
++  tree rettype = TREE_TYPE (TREE_TYPE (current_function_decl));
++  int firstreg = VOID_TYPE_P (rettype) ? RVM_R0 : RVM_R2;
++  uint64_t mask = 1ULL << RVM_FP;
++  for (int regno = firstreg; regno < RVM_FP; regno++)
++    if (df_regs_ever_live_p (regno))
++      mask |= 1ULL << regno;
++  return mask;
++}
++
++static HOST_WIDE_INT
++rvm_frame_alloc_size (void)
++{
++  HOST_WIDE_INT size = get_frame_size ();
++  size += (HOST_WIDE_INT) crtl->outgoing_args_size;
++  return (size + 3) & ~HOST_WIDE_INT (3);
++}
++
+ void
+-rvm_expand_prologue ( void )
+-{
+-	uint64_t	  mask;
+-	tree		  rettype;
+-	tree		  fntype;
+-	int			  firstreg;
+-	int			  regno;
+-	HOST_WIDE_INT frame_size;
+-
+-	mask = 0;
+-
+-	fntype	 = TREE_TYPE ( current_function_decl );
+-	rettype	 = TREE_TYPE ( fntype );
+-	firstreg = VOID_TYPE_P ( rettype ) ? RVM_R0 : RVM_R2;
+-
+-	for ( regno = firstreg; regno < RVM_FP; regno++ )
+-	{
+-		if ( ! df_regs_ever_live_p ( regno ) )
+-		{
+-			continue;
+-		}
+-
+-		mask |= 1ULL << regno;
+-	}
+-
+-	mask |= ( 1ULL << RVM_FP );
+-	mask &= ~( 1ULL << RVM_SP );
+-
+-	emit_insn ( gen_pushf ( GEN_INT ( mask ) ) );
+-
+-	frame_size = get_frame_size ();
+-
+-	frame_size += rvm_incoming_reg_arg_home_size ();
+-
+-	if ( frame_size > 0 )
+-	{
+-		emit_insn ( gen_subdi3 ( stack_pointer_rtx, stack_pointer_rtx, GEN_INT ( frame_size ) ) );
+-	}
++rvm_expand_prologue (void)
++{
++  emit_insn (gen_pushf (GEN_INT (rvm_frame_save_mask ())));
++  HOST_WIDE_INT size = rvm_frame_alloc_size ();
++  if (size != 0)
++    emit_insn (gen_subdi3 (stack_pointer_rtx, stack_pointer_rtx,
++                           GEN_INT (size)));
+ }
+ 
+ void
+-rvm_expand_epilogue ( void )
+-{
+-	emit_insn ( gen_popf () );
+-	emit_jump_insn ( gen_return () );
+-}
+-
+-/* Implements the macro INITIAL_ELIMINATION_OFFSET, return the OFFSET.  */
++rvm_expand_epilogue (void)
++{
++  emit_insn (gen_popf ());
++  emit_jump_insn (gen_return ());
++}
+ 
+ int
+-rvm_initial_elimination_offset ( int from, int to )
+-{
+-	HOST_WIDE_INT local_size = get_frame_size ();
+-
+-	if ( from == FRAME_POINTER_REGNUM && to == STACK_POINTER_REGNUM )
+-	{
+-		/* The virtual frame pointer addresses locals.  After the prologue
+-		   reserves the local area, SP points at the lowest address in that
+-		   block, so FP-based negative local slots must eliminate to
+-		   positive SP offsets within the reserved frame.  */
+-		return local_size;
+-	}
+-
+-	if ( from == HARD_FRAME_POINTER_REGNUM && to == STACK_POINTER_REGNUM )
+-	{
+-		/* pushf establishes the hard frame pointer before the dynamic part
+-		   of the frame is allocated.  */
+-		return local_size + rvm_incoming_reg_arg_home_size ();
+-	}
+-
+-	if ( from == ARG_POINTER_REGNUM && to == STACK_POINTER_REGNUM )
+-	{
+-		/* Incoming register arguments are homed above the local area.  */
+-		return local_size;
+-	}
+-
+-	return ( 0 );
+-}
+-
+-/* Worker function for TARGET_SETUP_INCOMING_VARARGS.  */
++rvm_initial_elimination_offset (int from, int to)
++{
++  HOST_WIDE_INT size = rvm_frame_alloc_size ();
++  HOST_WIDE_INT saved = 8 * (1 + popcount_hwi (rvm_frame_save_mask ()));
++  /* Locals lie immediately below PUSHF, outgoing arguments below locals.
++     The argument pointer addresses the caller's 64-byte register homes,
++     immediately above JSR's eight-byte return address. */
++  if (from == ARG_POINTER_REGNUM)
++    return (to == STACK_POINTER_REGNUM ? size : 0) + saved + 8;
++  if (to == STACK_POINTER_REGNUM)
++    return size;
++  return 0;
++}
+ 
+ static void
+-rvm_setup_incoming_varargs ( cumulative_args_t cum_v, const function_arg_info &, int * pretend_size, int no_rtl )
+-{
+-	CUMULATIVE_ARGS * cum;
+-	int				  stdarg_regs;
+-
+-	cum = get_cumulative_args ( cum_v );
+-
+-	if ( *cum <= RVM_R9 )
+-	{
+-		stdarg_regs = ( RVM_R9 - *cum ) + 1;
+-	}
+-	else
+-	{
+-		stdarg_regs = 0;
+-	}
+-
+-	*pretend_size = stdarg_regs * 8;
+-
+-	if ( no_rtl )
+-	{
+-		return;
+-	}
+-
+-	/* Later: spill remaining arg regs to the pretend area here.  */
++rvm_setup_incoming_varargs (cumulative_args_t cum_v,
++                           const function_arg_info &last_named,
++                           int *pretend_size, int no_rtl)
++{
++  int regno = *get_cumulative_args (cum_v);
++  if (last_named.mode != VOIDmode)
++    regno += CEIL (last_named.promoted_size_in_bytes (), UNITS_PER_WORD);
++  *pretend_size = 0;  /* The caller owns the register homes. */
++  if (no_rtl)
++    return;
++  for (; regno <= RVM_R9; regno++)
++    {
++      rtx slot = gen_frame_mem (DImode, plus_constant (Pmode,
++          arg_pointer_rtx, (regno - RVM_R2) * UNITS_PER_WORD));
++      emit_move_insn (slot, gen_rtx_REG (DImode, regno));
++    }
+ }
+ 
+ /* Return the fixed registers used for condition codes.  */
+@@ -726,7 +637,7 @@
+ 	cum = get_cumulative_args ( cum_v );
+ 
+ 	// r2-r9 (8 regs)
+-	if ( *cum <= RVM_R9 )
++	if (arg.mode != VOIDmode && *cum <= RVM_R9 )
+ 	{
+ 		return ( gen_rtx_REG ( arg.mode, *cum ) );
+ 	}
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -315,7 +315,7 @@
+ 
+ /* Define this if it is the responsibility of the caller to allocate
+    the area reserved for arguments passed in registers.  */
+-#define REG_PARM_STACK_SPACE(FNDECL) (6 * UNITS_PER_WORD)
++#define REG_PARM_STACK_SPACE(FNDECL) (8 * UNITS_PER_WORD)
+ 
+ /* Offset from the argument pointer register to the first argument's
+    address.  On some machines it may depend on the data type of the
+@@ -372,7 +372,7 @@
+ /* Normal alignment required for function parameters on the stack, in
+    bits.  All stack parameters receive at least this much alignment
+    regardless of data type.  */
+-#define PARM_BOUNDARY 32
++#define PARM_BOUNDARY 64
+ 
+ /* Alignment of field after `int : 0' in a structure.  */
+ #define EMPTY_FIELD_BOUNDARY  32
+@@ -499,6 +499,7 @@
+   { \
+     builtin_define_std ("rvm");			\
+     builtin_define_std ("RVM");			\
++    builtin_define ("__RVM_CALLER_ARG_HOME__=64"); \
+     builtin_define ("__RVM_BIG_ENDIAN__");		\
+   }
+ 

@@ -8,6 +8,7 @@ header = '''
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
+#include <sys/intr.h>
 #include <sys/lwp.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
@@ -31,11 +32,13 @@ header += '''
 static void callout_wait(callout_impl_t *c __unused, void *interlock __unused, kmutex_t *lock __unused) { panic(rvm_callout_bad); }
 static struct callout_cpu callout_cpu0 __attribute__((section(".data"))) = { 0 };
 static unsigned int soft_pending __attribute__((section(".data"))) = 0;
+static void *real_softclock __attribute__((section(".data"))) = NULL;
 static void *callout_sih __attribute__((section(".data"))) = NULL;
 static void rvm_soft_schedule(void *cookie)
 {
     if (cookie != callout_sih) panic(rvm_callout_bad);
-    soft_pending = 1;
+    if (real_softclock != NULL) softint_schedule(real_softclock);
+    else soft_pending = 1;
 }
 static void rvm_no_sleepq(sleepq_t *sq __unused, wchan_t wc __unused,
     u_int count __unused, kmutex_t *lock __unused)

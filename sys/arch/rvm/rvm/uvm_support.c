@@ -63,7 +63,7 @@ uvm_pagealloc_strat(struct uvm_object *obj, voff_t offset, struct vm_anon *anon,
 void
 uvm_pagefree(struct vm_page *page)
 {
-	if (page == NULL || (page->flags & PG_FREE) != 0 ||
+	if (page == NULL || page->mdpage.pv_head != NULL || (page->flags & PG_FREE) != 0 ||
 	    (page->uanon != NULL && !rvm_bootanon_page_valid(page)) ||
 	    page->loan_count != 0 ||
 	    (page->uobject == NULL && page->wire_count != 0) ||
@@ -386,7 +386,7 @@ void ubc_purge(struct uvm_object *obj)
 	if (!LIST_EMPTY(&obj->uo_ubc))
 		panic(rvm_no_object);
 }
-bool pmap_clear_modify(struct vm_page *page __unused) { panic(rvm_no_object); }
+
 void vholdl(struct vnode *vnode __unused) { panic(rvm_no_object); }
 void
 kpreempt_disable(void)
@@ -534,5 +534,15 @@ preempt_point(void)
 		panic(rvm_no_sleep);
 	}
 	__asm volatile("" ::: "memory");
+	rvm_intr_resume(guard);
+}
+
+/* The caller holds an IRQ guard; UP atomic operation for MI softints. */
+void
+atomic_or_uint(volatile unsigned int *value, unsigned int bits)
+{
+	unsigned int guard = rvm_intr_suspend();
+	check_mode();
+	*value |= bits;
 	rvm_intr_resume(guard);
 }

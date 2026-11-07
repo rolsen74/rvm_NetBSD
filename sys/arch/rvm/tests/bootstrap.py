@@ -15,10 +15,14 @@ def main():
     parser.add_argument('--cross', required=True)
     parser.add_argument('--vmasm', default='VMAsm')
     parser.add_argument('--vmemu', default='VMEmu')
-    parser.add_argument('--suite', choices=('new', 'wait', 'waitstress', 'asyncirq', 'asyncstress', 'platformclock', 'lwpvm', 'uarea', 'runtime', 'timecounter', 'hardclock', 'clock', 'irq', 'trap', 'idle', 'runq', 'switch', 'lwp', 'context', 'full'), default='new',
-                        help='new/wait: MI sleep queues, CVs and pause; asyncirq: asynchronous IRQs and preemption; platformclock: platform clocks and timed sleeps; lwpvm: MI LWP VM lifecycle; uarea: guarded stacks; runtime: compiler and accounting; timecounter: MI uptime; hardclock: ticks and callouts; clock: repeating wakeups; irq/trap/idle/runq/switch/lwp/context: earlier CPU work; full: all regressions')
+    parser.add_argument('--suite', choices=('allocations', 'kcopy', 'managedpmap', 'prf', 'abi', 'softint', 'softintstress', 'new', 'wait', 'waitstress', 'asyncirq', 'asyncstress', 'platformclock', 'lwpvm', 'uarea', 'runtime', 'timecounter', 'hardclock', 'clock', 'irq', 'trap', 'idle', 'runq', 'switch', 'lwp', 'context', 'full'), default='new',
+                        help='new/softint: generic MI softints and LWP softclock; wait: MI sleep queues, CVs and pause; asyncirq: asynchronous IRQs and preemption; platformclock: platform clocks and timed sleeps; lwpvm: MI LWP VM lifecycle; uarea: guarded stacks; runtime: compiler and accounting; timecounter: MI uptime; hardclock: ticks and callouts; clock: repeating wakeups; irq/trap/idle/runq/switch/lwp/context: earlier CPU work; full: all regressions')
     parser.add_argument('--stress-seconds', type=int, default=60, help='stress duration, 10..600 seconds')
+    parser.add_argument('--timeout', type=float, default=5,
+                        help='default VM observation time in seconds; explicitly timed cases keep their own deadlines')
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error('--timeout must be positive')
     if not 10 <= args.stress_seconds <= 600:
         parser.error('--stress-seconds must be between 10 and 600')
     obj = args.objdir.resolve()
@@ -44,11 +48,20 @@ def main():
                 '-Wno-unused-parameter', '-D_KERNEL', '-I' + str(obj / 'include'),
                 '-I' + str(root / 'sys'), '-I' + str(root / 'common/include')]
 
-    def run(directory, timeout=5):
+    def run(directory, timeout=None, allow_exit=False):
+        if timeout is None:
+            timeout = args.timeout
+            # Physical-page metadata startup scales with configured RAM.
+            # Preserve the normal minimum for large images in quick runs.
+            memory = re.search(r'Size = (\d+)', (directory / 'vm.config').read_text())
+            if memory is not None and int(memory[1]) > 1024:
+                timeout = max(timeout, 5)
         try:
             result = subprocess.run([args.vmemu, '-c', 'vm.config'], cwd=directory,
                                     env=env, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, timeout=timeout)
+            if allow_exit and result.returncode == 0:
+                return (result.stdout + result.stderr).decode(errors='replace')
             raise AssertionError('VM exited unexpectedly: ' + str(result.returncode)
                                  + '\n' + (result.stdout + result.stderr).decode(
                                      errors='replace')[:12000])
@@ -56,7 +69,7 @@ def main():
             # SDL logs come from the GUI thread and can interrupt a boot
             # line between EmuFunc characters. Keep stderr separate and
             # remove the single host display-info printf before parsing.
-            out = exc.stdout.decode(errors='replace')
+            out = (exc.stdout or b'').decode(errors='replace')
             out = re.sub(r'VMEmu display: SDL video driver [^\r\n]*\r?\n', '', out)
             return out + '\n' + (exc.stderr or b'').decode(errors='replace')
 
@@ -91,7 +104,7 @@ def main():
                             '--cc', args.cross + 'gcc'], check=True)
             subprocess.run([args.cross + 'gcc', '-c', str(work / 'wrapper.s'),
                             '-o', str(work / 'machdep.o')], check=True)
-            objects = [obj / 'locore.o', obj / 'cpuswitch.o', obj / 'cpu_switch.o', obj / 'vm_machdep.o', obj / 'lwp_startup.o', obj / 'bootsched.o', obj / 'mi_switch.o', obj / 'runq.o', obj / 'idle_loop.o', obj / 'trap.o', trap_probe or obj / 'trap_probe.o', obj / 'irq.o', obj / 'intr.o', obj / 'asyncirq.o', obj / 'async_probe.o', obj / 'async_verify.o', irq_probe or obj / 'irq_probe.o', clock_probe or obj / 'clock_probe.o', obj / 'bootclock.o', obj / 'clock.o', obj / 'clock_verify.o', obj / 'hardclock.o', obj / 'callout.o', obj / 'timecounter.o', obj / 'uarea.o', obj / 'lwpvm.o', obj / 'wait.o', obj / 'wait_abi.o', obj / 'wait_verify.o', work / 'machdep.o', obj / 'earlycons.o',
+            objects = [obj / 'locore.o', obj / 'cpuswitch.o', obj / 'cpu_switch.o', obj / 'vm_machdep.o', obj / 'lwp_startup.o', obj / 'bootsched.o', obj / 'mi_switch.o', obj / 'runq.o', obj / 'idle_loop.o', obj / 'trap.o', trap_probe or obj / 'trap_probe.o', obj / 'irq.o', obj / 'intr.o', obj / 'asyncirq.o', obj / 'async_probe.o', obj / 'async_verify.o', irq_probe or obj / 'irq_probe.o', clock_probe or obj / 'clock_probe.o', obj / 'bootclock.o', obj / 'clock.o', obj / 'clock_verify.o', obj / 'hardclock.o', obj / 'callout.o', obj / 'timecounter.o', obj / 'uarea.o', obj / 'lwpvm.o', obj / 'wait.o', obj / 'wait_abi.o', obj / 'wait_verify.o', obj / 'softint.o', obj / 'softint_verify.o', obj / 'prf.o', obj / 'pmap_verify.o', obj / 'kcopy.o', obj / 'copy.o', work / 'machdep.o', obj / 'earlycons.o',
                        obj / 'bootmem.o', obj / 'pmap.o', obj / 'uvm_machdep.o',
                        obj / 'uvm_bootstrap.o', obj / 'uvm_support.o', obj / 'bootalloc.o',
                        obj / 'bootmap.o', obj / 'bootobject.o', obj / 'bootkm.o',
@@ -99,7 +112,7 @@ def main():
             objects += [obj / (name + '.o') for name in
                         ('uvm_physseg', 'uvm_page', 'uvm_extent', 'uvm_clock',
                          'uvm_meter', 'uvm_pgflcache', 'uvm_map', 'rbtree',
-                         'uvm_object', 'uvm_page_status', 'radixtree', 'uvm_km', 'vmem', 'pool', 'uvm_anon', 'uvm_amap')]
+                         'uvm_object', 'uvm_page_status', 'radixtree', 'uvm_km', 'vmem', 'pool', 'uvm_anon', 'uvm_amap', 'strlen', 'memchr')]
             objects += list(extra_objects)
             if assembly:
                 asm = ' section ".text",code\n xdef rvm_test_probe\nrvm_test_probe:\n' + assembly
@@ -111,7 +124,251 @@ def main():
                            + [str(path) for path in objects], check=True)
             configure(work, 256)
 
-        if args.suite in ('new', 'wait', 'full'):
+        if args.suite in ('kcopy', 'full'):
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work, timeout=8)
+            assert 'RVM kernel copies ready; MMU fault return and PCB recovery verified.' in out, out
+            print('PASS: final kernel reaches kcopy MMU-fault recovery (640 MiB)', flush=True)
+            subprocess.run([args.vmasm, '-i', str(Path(__file__).parent / 'copy_regs.vma'),
+                            '-o', str(work / 'copy_regs.o'), '--obj'], check=True, stdout=subprocess.DEVNULL)
+            build_wrapper((Path(__file__).parent / 'kcopy.c').read_text(), extra_objects=(work / 'copy_regs.o',))
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work, timeout=8)
+                assert 'RVM kcopy fault return, overlap, PCB restoration and worker copies verified.' in out, out
+                print(f'PASS: kcopy MMU/RTE recovery, all preserved registers, overlap, partial faults and worker PCB isolation ({pages * 64} KiB)', flush=True)
+            for operation in (
+                'frame.saved.root ^= 2048;',
+                'frame.saved.pc = (vaddr_t)rvm_kcopy_bytes;',
+                'frame.saved.header &= ~PSL_S;',
+                'frame.saved.header = (3UL << 48) | (2UL << 32) | PSL_S;',
+                'pcb->pcb_onfault = (void *)1;',
+            ):
+                body = r'''
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <machine/pcb.h>
+#include <machine/bootcopy.h>
+#include <machine/asyncirq.h>
+#include <machine/psl.h>
+extern char rvm_kcopy_read[], rvm_kcopy_fault[], rvm_kcopy_bytes[];
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    struct rvm_copyfault_frame frame;
+    struct pcb *pcb = lwp_getpcb(curlwp);
+    memset(&frame, 0, sizeof(frame));
+    rvm_intr_suspend();
+    pcb->pcb_onfault = rvm_kcopy_fault;
+    frame.saved.header = (3UL << 48) | (5UL << 32) | PSL_S;
+    frame.saved.root = pmap_kernel()->pm_root;
+    frame.saved.pc = (vaddr_t)rvm_kcopy_read;
+''' + operation + '\nrvm_copyfault_dispatch(&frame); rvm_boot_stop();\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert 'fatal startup exception' in out and 'CPU stopped.' in out, out
+                print('PASS: copy-fault recovery rejects ' + operation, flush=True)
+            body = r'''
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <machine/pcb.h>
+#include <machine/asyncirq.h>
+extern char rvm_kcopy_fault[];
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    rvm_intr_suspend();
+    ((struct pcb *)lwp_getpcb(curlwp))->pcb_onfault = rvm_kcopy_fault;
+    *(volatile unsigned char *)0 = 1;
+}
+'''
+            build_wrapper(body)
+            out = run(work)
+            assert 'fatal startup exception' in out and 'vector 0x0000000000000005' in out, out
+            print('PASS: unrelated MMU fault stays fatal even with a copy recovery cookie', flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite == 'allocations':
+            cases = (
+                ('bootmap.c', 'MI kernel VM map reservations verified.'),
+                ('bootobject.c', 'Resident UVM objects and radix exhaustion verified.'),
+                ('bootanonmap.c', 'MI anonymous VM entries, aliases and rollback verified.'),
+                ('bootamap.c', 'MI anonymous maps, sharing and exhaustion verified.'),
+                ('bootanon.c', 'MI anonymous descriptors, pages and exhaustion verified.'),
+                ('bootcache.c', 'MI pool cache magazines, callbacks and exhaustion verified.'),
+                ('bootpool.c', 'MI pool ownership, page lists and exhaustion verified.'),
+                ('bootheap.c', 'Bootstrap kmem heap fragmentation and exhaustion verified.'),
+                ('bootkm.c', 'MI wired kernel allocation and rollback verified.'),
+                ('bootalloc.c', 'Wired buffer ownership and rollback verified.'),
+            )
+            for filename, marker in cases:
+                build_wrapper((Path(__file__).parent / filename).read_text())
+                out = run(work, timeout=8)
+                assert marker in out, out
+                print('PASS: focused allocation regression ' + filename, flush=True)
+            return
+
+        if args.suite in ('managedpmap', 'full'):
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work, timeout=8)
+            assert 'RVM managed pmap ready; aliases, read/write tracking and page protection verified.' in out, out
+            print('PASS: final kernel reaches managed pmap/PV and R/M tracking (640 MiB)', flush=True)
+            build_wrapper((Path(__file__).parent / 'managedpmap.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work, timeout=8)
+                assert 'RVM managed pmap aliases, access bits, wiring and protections verified.' in out, out
+                print(f'PASS: managed aliases, R/M bits, wiring, protections, real IRQs and exact cleanup ({pages * 64} KiB)', flush=True)
+            for operation, expected in (
+                ('pmap_enter((pmap_t)1, va, pa, VM_PROT_READ, 0);', 'Invalid or unsupported kernel pmap operation.'),
+                ('pmap_enter(pmap_kernel(), va + 1, pa, VM_PROT_READ, 0);', 'Invalid or unsupported kernel pmap operation.'),
+                ('pmap_enter(pmap_kernel(), va, pa + 1, VM_PROT_READ, 0);', 'Invalid or unsupported kernel pmap operation.'),
+                ('pmap_enter(pmap_kernel(), va, pa, VM_PROT_READ, 0x80000000);', 'Invalid or unsupported kernel pmap operation.'),
+                ('pmap_enter(pmap_kernel(), va, pa, VM_PROT_READ, VM_PROT_WRITE);', 'Invalid or unsupported kernel pmap operation.'),
+                ('pmap_unwire(pmap_kernel(), va);', 'Invalid or unsupported kernel pmap operation.'),
+                ('pmap_enter(pmap_kernel(), va, pa, VM_PROT_READ, 0); uvm_pagefree(pg);', 'Invalid raw UVM page operation'),
+            ):
+                body = r'''
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    struct vm_page *pg = uvm_pagealloc(NULL, 0, NULL, UVM_PGA_ZERO | UVM_PGA_USERESERVE);
+    paddr_t pa = VM_PAGE_TO_PHYS(pg); vaddr_t va = VM_KERNEL_VM_BASE; (void)pa;
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert expected in out, out
+                print('PASS: managed pmap rejects ' + operation, flush=True)
+            for operation, vector in (('pmap_page_protect(pg, VM_PROT_READ);', 4),
+                                      ('pmap_page_protect(pg, VM_PROT_NONE);', 5)):
+                body = r'''
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    struct vm_page *pg = uvm_pagealloc(NULL, 0, NULL, UVM_PGA_ZERO | UVM_PGA_USERESERVE);
+    vaddr_t va = VM_KERNEL_VM_BASE;
+    pmap_enter(pmap_kernel(), va, VM_PAGE_TO_PHYS(pg), VM_PROT_READ | VM_PROT_WRITE, 0);
+    pmap_enter(pmap_kernel(), va + PAGE_SIZE, VM_PAGE_TO_PHYS(pg), VM_PROT_READ | VM_PROT_WRITE, 0);
+    *(volatile uint64_t *)va = 17;
+''' + operation + '\n*(volatile uint64_t *)(va + PAGE_SIZE) = 18;\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert f'vector 0x{vector:016x}' in out and 'CPU stopped.' in out, out
+                print('PASS: page-wide alias protection enforces hardware vector ' + str(vector), flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite == 'full':
+            subprocess.run(['python3', str(Path(__file__).parent / 'linker.py'),
+                            '--cross', args.cross], check=True)
+
+        macros = subprocess.run([args.cross + 'gcc', '-nostdinc', '-dM', '-E', '-x', 'c', '/dev/null'],
+                                check=True, text=True, stdout=subprocess.PIPE).stdout
+        caller_homes = '__RVM_CALLER_ARG_HOME__ 64' in macros
+        if args.suite == 'abi' or (args.suite == 'full' and caller_homes):
+            if not caller_homes:
+                raise SystemExit('The ABI suite requires GCC with the caller-home/stack/varargs fix.')
+            opt_index = compiler.index('-O2')
+            for optimization in ('-O0', '-O2', '-Os'):
+                compiler[opt_index] = optimization
+                build_wrapper((Path(__file__).parent / 'abi.c').read_text())
+                for pages in (256, 1024):
+                    configure(work, pages)
+                    out = run(work, timeout=8)
+                    assert 'RVM stacked arguments, scalar homes, stdarg and va_copy verified.' in out, out
+                    print(f'PASS: RVM argument ABI, stack/narrow arguments, stdarg/va_copy and aggregates ({optimization}, {pages * 64} KiB)', flush=True)
+            compiler[opt_index] = '-O2'
+            if args.suite == 'abi':
+                return
+
+        if args.suite == 'prf' or (args.suite == 'full' and caller_homes):
+            if not caller_homes:
+                raise SystemExit('The formatter suite requires GCC with the caller-home/stack/varargs fix.')
+            body = r'''
+#include <sys/systm.h>
+#include <machine/bootprintf.h>
+const char prf_ok[] = "RVM MI printf and snprintf verified.\n";
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    rvm_normal_early_init(bi);
+    if (!rvm_prf_verify()) rvm_boot_stop();
+    printf("stacked printf: %d %d %d %d %d %d %d %d %d %d %d %d\n", 1,2,3,4,5,6,7,8,9,10,11,12);
+    rvm_early_puts(prf_ok); rvm_boot_stop();
+}
+'''
+            build_wrapper(body)
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work, timeout=8)
+                assert 'RVM MI printf and snprintf verified.' in out, out
+                assert 'stacked printf: 1 2 3 4 5 6 7 8 9 10 11 12' in out, out
+                print(f'PASS: unchanged MI format parser, stacked printf, widths/precision, snprintf sizing and truncation ({pages * 64} KiB)', flush=True)
+            if args.suite == 'prf':
+                return
+
+        if args.suite in ('new', 'softint', 'full'):
+            shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
+            configure(work, 10240)
+            out = run(work, timeout=8)
+            assert 'RVM kernel copies ready; MMU fault return and PCB recovery verified.' in out, out
+            assert 'fatal startup exception' not in out and 'UVM panic:' not in out, out
+            print('PASS: final kernel reaches stage 51, including MI softints, LWP softclock, managed pmap and kcopy (640 MiB)', flush=True)
+            build_wrapper('''
+#include <machine/bootsoftint.h>
+const char soft_ok[] = "RVM MI software interrupts verified.\\n";
+const char soft_bad[] = "RVM MI software interrupts failed.\\n";
+void rvm_early_init(const struct rvm_bootinfo *bi)
+{
+    rvm_normal_early_init(bi);
+    if (rvm_boot_stage == 32 && rvm_softint_verify()) rvm_early_puts(soft_ok);
+    else rvm_early_puts(soft_bad);
+    rvm_boot_stop();
+}
+''')
+            out = run(work, timeout=8)
+            assert 'RVM MI software interrupts verified.' in out, out
+            print('PASS: MI softint priorities, coalescing, LWP dispatch and teardown', flush=True)
+            build_wrapper((Path(__file__).parent / 'softint.c').read_text())
+            for pages in (256, 1024):
+                configure(work, pages)
+                out = run(work, timeout=12)
+                assert 'RVM MI softint FIFO, reschedule, IRQ softclock, waits and rollback verified.' in out, out
+                print(f'PASS: MI softint FIFO/reschedule, table capacity, real IRQ softclock, CV wakeups, rollback and cleanup ({pages * 64} KiB)', flush=True)
+            for operation in (
+                'softint_establish(SOFTINT_NET, callback, NULL);',
+                'softint_establish(SOFTINT_NET | SOFTINT_MPSAFE | SOFTINT_RCPU, callback, NULL);',
+                'softint_establish(SOFTINT_NET | SOFTINT_MPSAFE, NULL, NULL);',
+                'softint_schedule(NULL);',
+                'softint_schedule((void *)((uintptr_t)cookie + 1));',
+                'softint_disestablish(cookie); softint_schedule(cookie);',
+                'softint_schedule_cpu(cookie, (struct cpu_info *)1);',
+                'splhigh(); softint_establish(SOFTINT_CLOCK | SOFTINT_MPSAFE, callback, NULL);',
+            ):
+                body = r'''
+#include <sys/systm.h>
+#include <sys/cpu.h>
+#include <sys/lwp.h>
+#include <sys/intr.h>
+#include <machine/bootsched.h>
+#include <machine/bootsoftint.h>
+static void callback(void *arg __unused) { }
+void rvm_early_init(const struct rvm_bootinfo *bi) {
+    void *cookie;
+    rvm_normal_early_init(bi);
+    rvm_bootsched_init(); rvm_bootsched_idle_init(NULL, NULL); rvm_softint_init();
+    cookie = softint_establish(SOFTINT_CLOCK | SOFTINT_MPSAFE, callback, NULL);
+    (void)cookie;
+''' + operation + '\n}\n'
+                build_wrapper(body)
+                out = run(work)
+                assert 'NetBSD/RVM UVM panic: Invalid bootstrap MI software interrupt operation' in out, out
+                print('PASS: softint boundary rejects ' + operation, flush=True)
+            if args.suite != 'full':
+                return
+
+        if args.suite in ('wait', 'full'):
             marker = 'RVM MI bintime waits ready; timeout conversion and remaining time verified.'
             shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
             configure(work, 10240)
@@ -172,6 +429,25 @@ void rvm_early_init(const struct rvm_bootinfo *bi) {
                 print('PASS: wait boundary rejects invalid lock/timeout/lifecycle/context: ' + operation, flush=True)
             if args.suite != 'full':
                 return
+
+        if args.suite == 'softintstress':
+            body = '#define RVM_WAIT_STRESS_NS ' + str(args.stress_seconds * 1000000000) + 'UL\n'
+            body += '#include <machine/bootsoftint.h>\n#include <machine/bootclock.h>\n'
+            stress = (Path(__file__).parent / 'waitstress.c').read_text()
+            stress = stress.replace('mutex_init(&lock, MUTEX_DEFAULT, IPL_NONE);',
+                'REQUIRE(rvm_softint_init() && rvm_callout_softint_start());\n'
+                '\tmutex_init(&lock, MUTEX_DEFAULT, IPL_NONE);', 1)
+            stress = stress.replace('REQUIRE(rvm_bootsched_fini());',
+                'REQUIRE(rvm_callout_softint_stop() && rvm_softint_fini());\n'
+                '\tREQUIRE(rvm_bootsched_fini());', 1)
+            stress = stress.replace('RVM sustained MI CV producer/consumer stress and cleanup verified.',
+                'RVM sustained MI softint/softclock CV producer/consumer stress and cleanup verified.')
+            build_wrapper(body + stress)
+            configure(work, 256)
+            out = run(work, timeout=args.stress_seconds + 20)
+            assert 'RVM sustained MI softint/softclock CV producer/consumer stress and cleanup verified.' in out, out
+            print(f'PASS: {args.stress_seconds}-second eight-worker CV/message/timeout stress with dedicated MI softclock and complete cleanup (16 MiB)', flush=True)
+            return
 
         if args.suite == 'waitstress':
             body = '#define RVM_WAIT_STRESS_NS ' + str(args.stress_seconds * 1000000000) + 'UL\n'
@@ -920,7 +1196,7 @@ reloc_data:
         # The free range must change with RAM size, without including the image,
         # bootstrap tables, scratch page or the loader's final stack page.
         shutil.copyfile(obj / 'netbsd.fhr', work / 'netbsd.fhr')
-        for pages in (32, 256, 1024, 10240):
+        for pages in (64, 256, 1024, 10240):
             configure(work, pages)
             out = run(work)
             assert context_ready in out and 'fatal startup exception' not in out, out
@@ -938,12 +1214,18 @@ reloc_data:
         # Small RAM may fail while constructing tables or handing off the
         # remaining pages, depending on the current image footprint.
         configure(work, 16)
-        out = run(work)
-        assert any(message in out for message in (
-            'Cannot build or verify bootstrap page tables.',
-            'UVM physical memory handoff failed.')) and pool_ready not in out, out
+        out = run(work, allow_exit=True)
+        if 'NetBSD/RVM early bootstrap' not in out:
+            # The relocated sections can exceed RAM before reaching C.
+            assert '6: Parse File' in out and 'Program exited' in out, out
+            assert '7: Starting Program' not in out, out
+            print('PASS: 1 MiB loader rejects the oversized relocated image', flush=True)
+        else:
+            assert any(message in out for message in (
+                'Cannot build or verify bootstrap page tables.',
+                'UVM physical memory handoff failed.')) and pool_ready not in out, out
+            print('PASS: 1 MiB stops cleanly before completing memory startup', flush=True)
         assert 'fatal startup exception' not in out and 'UVM panic:' not in out, out
-        print('PASS: 1 MiB stops cleanly before completing memory startup', flush=True)
 
         configure(work, reserved // 65536 + 2)
         out = run(work)

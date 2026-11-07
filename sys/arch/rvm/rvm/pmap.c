@@ -1,9 +1,13 @@
 /*
  * Supervisor pmap for the RVM six-level hardware walker. The initial wired
  * kernel window has preallocated tables: editing it never steals UVM memory.
- * Single CPU, interrupts and caches disabled; user pmaps/PV tracking pending.
+ * Single CPU with IRQ-guarded mapping transactions; user pmaps/caches pending.
  */
-#include <sys/null.h>
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/cpu.h>
+#include <uvm/uvm.h>
+#include <machine/asyncirq.h>
 #include <machine/boot.h>
 #include <machine/bootmem.h>
 #include <machine/generic.h>
@@ -17,11 +21,38 @@ struct pmap kernel_pmap_store __attribute__((section(".data"))) = { 0 };
 /* kernel_pmap_ptr is emitted by locore: GCC cannot yet emit pointer constants. */
 const char rvm_msg_pmap_error[] = "Invalid or unsupported kernel pmap operation.\n";
 
+/* The preallocated kernel VM window supplies one PV slot per possible VA.
+ * Entries also remember wiring for unmanaged mappings. No dynamic allocation
+ * or bootstrap-memory use is needed after the UVM handoff. */
+struct rvm_pv_entry {
+	struct rvm_pv_entry *next, *previous;
+	struct vm_page *page;
+	unsigned int wired;
+	unsigned int reserved; /* Keep PV slots a power of two in size. */
+};
+__CTASSERT(sizeof(struct rvm_pv_entry) == 32);
+#define RVM_PV_SLOTS (VM_KERNEL_VM_SIZE / PAGE_SIZE)
+static struct rvm_pv_entry pv_entries[RVM_PV_SLOTS]
+	__attribute__((section(".data"))) = { 0 };
+#define RVM_PTE_ACCESS (RVM_PTE_USED_READ | RVM_PTE_USED_WRITE)
+
 static void __dead
 pmap_fail(void)
 {
 	rvm_early_puts(rvm_msg_pmap_error);
 	rvm_boot_stop();
+}
+
+static unsigned int pmap_guard(void)
+{
+	if (curlwp != NULL) return rvm_intr_suspend();
+	rvm_intr_disable();
+	if (rvm_boot_get_cr() != RVM_CR_MMU) pmap_fail();
+	return UINT_MAX;
+}
+static void pmap_unguard(unsigned int guard)
+{
+	if (guard != UINT_MAX) rvm_intr_resume(guard);
 }
 
 static paddr_t
@@ -178,6 +209,60 @@ pte_permissions(vm_prot_t prot)
 	return flags;
 }
 
+static struct rvm_pv_entry *pv_slot(vaddr_t va)
+{
+	return &pv_entries[(va - VM_KERNEL_VM_BASE) >> PAGE_SHIFT];
+}
+static vaddr_t pv_address(struct rvm_pv_entry *pv)
+{
+	return VM_KERNEL_VM_BASE + (pv - pv_entries) * PAGE_SIZE;
+}
+static void pv_detach(vaddr_t va, uint64_t oldpte)
+{
+	struct rvm_pv_entry *pv = pv_slot(va);
+	struct vm_page *pg = pv->page;
+	if (pg != NULL) {
+		pg->mdpage.attrs |= oldpte & RVM_PTE_ACCESS;
+		if (oldpte & RVM_PTE_USED_WRITE) pg->mdpage.attrs |= RVM_PTE_USED_READ;
+		if (pv->previous != NULL) {
+			if (pv->previous->next != pv) pmap_fail();
+			pv->previous->next = pv->next;
+		} else {
+			if (pg->mdpage.pv_head != pv) pmap_fail();
+			pg->mdpage.pv_head = pv->next;
+		}
+		if (pv->next != NULL) pv->next->previous = pv->previous;
+	}
+	pv->page = NULL; pv->next = pv->previous = NULL;
+}
+static void pv_attach(vaddr_t va, paddr_t pa)
+{
+	struct rvm_pv_entry *pv = pv_slot(va);
+	struct vm_page *pg = uvm.page_init_done ? PHYS_TO_VM_PAGE(pa) : NULL;
+	if (pg != NULL) {
+		if (pg->flags & PG_FREE) pmap_fail();
+		pv->page = pg; pv->next = pg->mdpage.pv_head; pv->previous = NULL;
+		if (pv->next != NULL) pv->next->previous = pv;
+		pg->mdpage.pv_head = pv;
+	}
+}
+/* Caller has IRQs masked across the PTE/PV/statistics transaction. */
+static void enter_kernel(vaddr_t va, paddr_t pa, unsigned long permissions,
+	unsigned int wired)
+{
+	volatile uint64_t *pte = pte_lookup(va, 0);
+	struct rvm_pv_entry *pv = pv_slot(va);
+	if (pte == NULL) pmap_fail();
+	if (*pte & RVM_PTE_VALID) {
+		if (pv->wired) kernel_pmap_store.pm_stats.wired_count--;
+		pv_detach(va, *pte);
+	} else kernel_pmap_store.pm_stats.resident_count++;
+	pv->wired = wired;
+	if (wired) kernel_pmap_store.pm_stats.wired_count++;
+	pv_attach(va, pa);
+	*pte = pa | permissions | RVM_PTE_VALID | RVM_PTE_SUPERVISOR;
+}
+
 void
 pmap_virtual_space(vaddr_t *start, vaddr_t *end)
 {
@@ -188,41 +273,63 @@ pmap_virtual_space(vaddr_t *start, vaddr_t *end)
 void
 pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 {
-	volatile uint64_t *pte;
+	unsigned int guard = pmap_guard();
 	unsigned long permissions = pte_permissions(prot);
+	check_kernel_range(va, PAGE_SIZE);
+	if ((pa & PAGE_MASK) || permissions == 0 ||
+		(flags != 0 && flags != PMAP_NOCACHE)) pmap_fail();
+	enter_kernel(va, pa, permissions, 1);
+	pmap_unguard(guard);
+}
 
-	check_kernel_range(va, RVM_MMU_PAGE_SIZE);
-	/* All current mappings are uncached; reject unsupported cache policies. */
-	if ((pa & RVM_MMU_PAGE_MASK) != 0 || permissions == 0 ||
-	    (flags != 0 && flags != PMAP_NOCACHE))
-		pmap_fail();
-	pte = pte_lookup(va, 0);
-	if (pte == NULL)
-		pmap_fail();
-	if ((*pte & RVM_PTE_VALID) == 0) {
-		kernel_pmap_store.pm_stats.resident_count++;
-		kernel_pmap_store.pm_stats.wired_count++;
-	}
-	/* Replacement clears hardware access bits belonging to the old page. */
-	*pte = pa | permissions | RVM_PTE_VALID | RVM_PTE_SUPERVISOR;
+int
+pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
+{
+	unsigned int guard = pmap_guard();
+	unsigned long permissions = pte_permissions(prot);
+	struct vm_page *pg;
+	if (pm != pmap_kernel()) pmap_fail();
+	check_kernel_range(va, PAGE_SIZE);
+	if ((pa & PAGE_MASK) || permissions == 0 ||
+		(flags & ~(PMAP_WIRED | PMAP_CANFAIL | PMAP_NOCACHE | VM_PROT_ALL)) ||
+		((flags & VM_PROT_ALL) & ~prot)) pmap_fail();
+	pg = uvm.page_init_done ? PHYS_TO_VM_PAGE(pa) : NULL;
+	if (pg == NULL || (pg->flags & PG_FREE)) pmap_fail();
+	enter_kernel(va, pa, permissions, (flags & PMAP_WIRED) != 0);
+	if (flags & (VM_PROT_READ | VM_PROT_EXECUTE)) pg->mdpage.attrs |= RVM_PTE_USED_READ;
+	if (flags & VM_PROT_WRITE) pg->mdpage.attrs |= RVM_PTE_ACCESS;
+	pmap_unguard(guard);
+	return 0;
+}
+
+void
+pmap_unwire(pmap_t pm, vaddr_t va)
+{
+	unsigned int guard = pmap_guard();
+	volatile uint64_t *pte;
+	if (pm != pmap_kernel()) pmap_fail();
+	check_kernel_range(va, PAGE_SIZE); pte = pte_lookup(va, 0);
+	if (pte == NULL || !(*pte & RVM_PTE_VALID) || !pv_slot(va)->wired) pmap_fail();
+	pv_slot(va)->wired = 0; kernel_pmap_store.pm_stats.wired_count--;
+	pmap_unguard(guard);
 }
 
 void
 pmap_kremove(vaddr_t va, vsize_t size)
 {
+	unsigned int guard = pmap_guard();
 	volatile uint64_t *pte;
 	vaddr_t end;
-
-	check_kernel_range(va, size);
-	end = va + size;
-	for (; va < end; va += RVM_MMU_PAGE_SIZE) {
+	check_kernel_range(va, size); end = va + size;
+	for (; va < end; va += PAGE_SIZE) {
 		pte = pte_lookup(va, 0);
-		if (pte != NULL && (*pte & RVM_PTE_VALID) != 0) {
-			*pte = 0;
-			kernel_pmap_store.pm_stats.resident_count--;
-			kernel_pmap_store.pm_stats.wired_count--;
+		if (pte != NULL && (*pte & RVM_PTE_VALID)) {
+			if (pv_slot(va)->wired) kernel_pmap_store.pm_stats.wired_count--;
+			pv_detach(va, *pte); pv_slot(va)->wired = 0;
+			*pte = 0; kernel_pmap_store.pm_stats.resident_count--;
 		}
 	}
+	pmap_unguard(guard);
 }
 
 void
@@ -236,6 +343,7 @@ pmap_remove(pmap_t pm, vaddr_t start, vaddr_t end)
 void
 pmap_protect(pmap_t pm, vaddr_t start, vaddr_t end, vm_prot_t prot)
 {
+	unsigned int guard = pmap_guard();
 	volatile uint64_t *pte;
 	unsigned long keep = pte_permissions(prot);
 	unsigned long mask = RVM_PTE_READ | RVM_PTE_WRITE | RVM_PTE_EXEC;
@@ -245,13 +353,14 @@ pmap_protect(pmap_t pm, vaddr_t start, vaddr_t end, vm_prot_t prot)
 	check_kernel_range(start, end - start);
 	if (prot == VM_PROT_NONE) {
 		pmap_remove(pm, start, end);
-		return;
+		pmap_unguard(guard); return;
 	}
 	for (; start < end; start += RVM_MMU_PAGE_SIZE) {
 		pte = pte_lookup(start, 0);
 		if (pte != NULL && (*pte & RVM_PTE_VALID) != 0)
 			*pte &= ~mask | keep; /* Protection may only remove permissions. */
 	}
+	pmap_unguard(guard);
 }
 
 bool
@@ -271,12 +380,14 @@ pmap_extract(pmap_t pm, vaddr_t va, paddr_t *pa)
 void
 pmap_update(pmap_t pm)
 {
+	unsigned int guard = pmap_guard();
 	if (pm != pmap_kernel() || rvm_boot_get_cr() != RVM_CR_MMU)
 		pmap_fail();
 	/* VMEmu walks tables on every access with I/D caches off (CR == 8).
 	 * There is no separate TLB in this mode. Revisit before enabling caches.
 	 */
 	__asm volatile("" ::: "memory");
+	pmap_unguard(guard);
 }
 
 long
@@ -335,4 +446,80 @@ paddr_t
 pmap_phys_address(paddr_t page)
 {
 	return page << RVM_MMU_PAGE_SHIFT;
+}
+
+/* Access history includes the bootstrap direct map as well as every tracked
+ * alias. Removing/replacing a mapping harvests its bits into mdpage.attrs. */
+static unsigned long page_access(struct vm_page *pg, unsigned long clear)
+{
+	volatile uint64_t *pte;
+	struct rvm_pv_entry *pv;
+	unsigned long attrs;
+	paddr_t pa;
+	if (!uvm.page_init_done || pg == NULL ||
+		PHYS_TO_VM_PAGE(VM_PAGE_TO_PHYS(pg)) != pg || (pg->flags & PG_FREE)) pmap_fail();
+	pa = VM_PAGE_TO_PHYS(pg); attrs = pg->mdpage.attrs;
+	pte = pte_lookup(pa, 0);
+	if (pte == NULL || (*pte & ~PAGE_MASK) != pa || !(*pte & RVM_PTE_VALID)) pmap_fail();
+	attrs |= *pte & RVM_PTE_ACCESS;
+	if (*pte & RVM_PTE_USED_WRITE) attrs |= RVM_PTE_USED_READ;
+	if (clear) *pte &= ~clear;
+	for (pv = pg->mdpage.pv_head; pv != NULL; pv = pv->next) {
+		pte = pte_lookup(pv_address(pv), 0);
+		if (pv->page != pg || pte == NULL || !(*pte & RVM_PTE_VALID) ||
+			(*pte & ~PAGE_MASK) != pa) pmap_fail();
+		attrs |= *pte & RVM_PTE_ACCESS;
+		if (*pte & RVM_PTE_USED_WRITE) attrs |= RVM_PTE_USED_READ;
+		if (clear) *pte &= ~clear;
+	}
+	pg->mdpage.attrs = attrs & ~clear;
+	return attrs;
+}
+bool pmap_is_modified(struct vm_page *pg)
+{
+	unsigned int g = pmap_guard();
+	bool result = (page_access(pg, 0) & RVM_PTE_USED_WRITE) != 0;
+	pmap_unguard(g); return result;
+}
+bool pmap_is_referenced(struct vm_page *pg)
+{
+	unsigned int g = pmap_guard();
+	bool result = (page_access(pg, 0) & RVM_PTE_USED_READ) != 0;
+	pmap_unguard(g); return result;
+}
+bool pmap_clear_modify(struct vm_page *pg)
+{
+	unsigned int g = pmap_guard();
+	bool result = (page_access(pg, RVM_PTE_USED_WRITE) & RVM_PTE_USED_WRITE) != 0;
+	pmap_unguard(g); return result;
+}
+bool pmap_clear_reference(struct vm_page *pg)
+{
+	unsigned int g = pmap_guard();
+	/* Writes imply references, so both hardware access bits must be cleared.
+	   Retain modification history independently before clearing write bits. */
+	unsigned long attrs = page_access(pg, RVM_PTE_ACCESS);
+	pg->mdpage.attrs |= attrs & RVM_PTE_USED_WRITE;
+	pmap_unguard(g); return (attrs & RVM_PTE_USED_READ) != 0;
+}
+void pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
+{
+	unsigned int g = pmap_guard();
+	struct rvm_pv_entry *pv;
+	if (prot & ~VM_PROT_ALL) pmap_fail();
+	page_access(pg, 0);
+	for (pv = pg->mdpage.pv_head; pv != NULL; ) {
+		struct rvm_pv_entry *next = pv->next;
+		vaddr_t va = pv_address(pv);
+		pmap_protect(pmap_kernel(), va, va + PAGE_SIZE, prot);
+		pv = next;
+	}
+	pmap_unguard(g);
+}
+
+void pmap_init(void)
+{
+	unsigned int g = pmap_guard();
+	if (!uvm.page_init_done || kernel_pmap_store.pm_root == 0) pmap_fail();
+	pmap_unguard(g);
 }

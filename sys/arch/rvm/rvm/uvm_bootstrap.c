@@ -23,6 +23,7 @@ const char rvm_uvm_format_error[] = "Unsupported early printf format.\n";
 /* Small early formatter for the formats used by MI physseg diagnostics.
  * Unsupported formats halt rather than misread the variadic arguments.
  */
+#ifndef __RVM_CALLER_ARG_HOME__
 struct early_args {
 	const uint64_t *registers;
 	unsigned int index;
@@ -120,6 +121,8 @@ rvm_uvm_diagnostic(const char *fmt, const uint64_t *registers, unsigned int fata
 		rvm_boot_stop();
 	}
 }
+
+#endif /* legacy compiler diagnostic adapter */
 
 int
 rvm_uvm_bootstrap(void)

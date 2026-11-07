@@ -1,5 +1,6 @@
 /* NetBSD/RVM supervisor entry after FHR relocation and BSS clearing. */
 #define _LOCORE
+#include <machine/asm.h>
 #include <machine/boot.h>
 
         section ".text",code
@@ -31,14 +32,26 @@ rvm_start:
         bne     .Lvector
         lea     rvm_boot_vectors,r10
         mtctrl  r10,vbr
-        jsr     rvm_early_init
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
+        jsr rvm_early_init
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         jmp     rvm_boot_stop
 
 rvm_boot_exception:
         /* Preserve GPRs before C; fatal only, no RTE/context restoration. */
         pushm   r0-r62
         move.q  r63,r2
-        jsr     rvm_boot_trap
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
+        jsr rvm_boot_trap
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         jmp     rvm_boot_stop
 
         /* Version-2 supervisor entry: complete GPR image, then hardware frame. */
@@ -47,7 +60,13 @@ rvm_boot_exception:
 rvm_supervisor_entry:
         pushm r0-r62
         move.q r63,r2
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_supervisor_dispatch
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         popm r0-r62
         rte
 
@@ -61,7 +80,13 @@ rvm_timer_interrupt_entry:
         move.q #8,r0
         mtctrl r0,cr
         move.q r63,r2
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_timer_irq_dispatch
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         popm r0
         /* Only the selected timer IRQ was enabled; the handler masked it.
          * Thus restoring CR before the GPR image cannot admit another IRQ.
@@ -131,6 +156,7 @@ rvm_emulator_putchar:
          * PUSHF saves mask (8), R3-R9 (56), R62 (8).
          * Early UVM diagnostics do not use stacked arguments.
          */
+#ifndef __RVM_CALLER_ARG_HOME__
         xref rvm_uvm_diagnostic
         xdef printf
 printf:
@@ -144,9 +170,17 @@ panic:
 rvm_uvm_print_entry:
         move.q r62,r3
         add.q #8,r3
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_uvm_diagnostic
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         popf
         rts
+
+#endif
 
         /* GCC's current RVM backend cannot emit symbolic pointer constants. */
         section ".rodata",data_ro

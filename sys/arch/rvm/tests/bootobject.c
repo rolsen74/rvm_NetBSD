@@ -24,7 +24,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	paddr_t pa;
 
 	rvm_normal_early_init(bi);
-	REQUIRE(rvm_boot_stage == 20 && rvm_bootradix_used() == 0);
+	REQUIRE(rvm_boot_stage == 32 && rvm_bootradix_used() == 0);
 	before = curcpu()->ci_counts[CPU_COUNT_FREEPAGES];
 	wired = uvmexp.wired;
 	REQUIRE(!rvm_bootobj_create(0) && !rvm_bootobj_create(1));

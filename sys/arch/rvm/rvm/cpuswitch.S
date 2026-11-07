@@ -1,5 +1,6 @@
 /* R2/R3: old/new PCB; R4: previous LWP, returned in R0 on the new stack. */
 #define _LOCORE
+#include <machine/asm.h>
 #include <machine/switch.h>
         section ".text",code
         SecAlign 4
@@ -37,6 +38,12 @@ rvm_lwp_trampoline:
         move.q r0,r4
         move.q r10,r2
         move.q r11,r3
+#if RVM_C_CALL_HOME
+        sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_cpu_lwp_start
+#if RVM_C_CALL_HOME
+        add.q #RVM_C_CALL_HOME,r63
+#endif
         xref rvm_boot_stop
         jmp rvm_boot_stop

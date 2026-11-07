@@ -16,9 +16,9 @@ HEADER_FLAGS := -D_KERNEL -I$(OBJDIR)/include -I$(SRC_TOP)/sys -I$(SRC_TOP)/comm
 HEADERS := $(wildcard $(RVM_DIR)/include/*.h)
 BOOT_SOURCES := $(wildcard $(RVM_DIR)/stand/boot/*.vma $(RVM_DIR)/stand/boot/includes_i/*.i)
 BOOT_OPTIONS := $(addprefix $(OBJDIR)/include/,opt_ddb.h opt_uvm.h opt_uvmhist.h opt_readahead.h opt_multiprocessor.h opt_pax.h opt_sysv.h opt_user_va0_disable_default.h opt_kmempages.h)
-MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache uvm_map rbtree uvm_object uvm_page_status radixtree uvm_km vmem pool uvm_anon uvm_amap
+MI_NAMES := uvm_physseg uvm_page uvm_extent uvm_clock uvm_meter uvm_pgflcache uvm_map rbtree uvm_object uvm_page_status radixtree uvm_km vmem pool uvm_anon uvm_amap strlen memchr
 MI_OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(MI_NAMES)))
-BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/cpuswitch.o $(OBJDIR)/cpu_switch.o $(OBJDIR)/vm_machdep.o $(OBJDIR)/lwp_startup.o $(OBJDIR)/bootsched.o $(OBJDIR)/mi_switch.o $(OBJDIR)/runq.o $(OBJDIR)/idle_loop.o $(OBJDIR)/trap.o $(OBJDIR)/trap_probe.o $(OBJDIR)/irq.o $(OBJDIR)/intr.o $(OBJDIR)/asyncirq.o $(OBJDIR)/async_probe.o $(OBJDIR)/async_verify.o $(OBJDIR)/irq_probe.o $(OBJDIR)/clock_probe.o $(OBJDIR)/bootclock.o $(OBJDIR)/clock.o $(OBJDIR)/clock_verify.o $(OBJDIR)/hardclock.o $(OBJDIR)/callout.o $(OBJDIR)/timecounter.o $(OBJDIR)/uarea.o $(OBJDIR)/lwpvm.o $(OBJDIR)/wait.o $(OBJDIR)/wait_abi.o $(OBJDIR)/wait_verify.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
+BOOT_OBJS := $(OBJDIR)/locore.o $(OBJDIR)/cpuswitch.o $(OBJDIR)/cpu_switch.o $(OBJDIR)/vm_machdep.o $(OBJDIR)/lwp_startup.o $(OBJDIR)/bootsched.o $(OBJDIR)/mi_switch.o $(OBJDIR)/runq.o $(OBJDIR)/idle_loop.o $(OBJDIR)/trap.o $(OBJDIR)/trap_probe.o $(OBJDIR)/irq.o $(OBJDIR)/intr.o $(OBJDIR)/asyncirq.o $(OBJDIR)/async_probe.o $(OBJDIR)/async_verify.o $(OBJDIR)/irq_probe.o $(OBJDIR)/clock_probe.o $(OBJDIR)/bootclock.o $(OBJDIR)/clock.o $(OBJDIR)/clock_verify.o $(OBJDIR)/hardclock.o $(OBJDIR)/callout.o $(OBJDIR)/timecounter.o $(OBJDIR)/uarea.o $(OBJDIR)/lwpvm.o $(OBJDIR)/wait.o $(OBJDIR)/wait_abi.o $(OBJDIR)/wait_verify.o $(OBJDIR)/softint.o $(OBJDIR)/softint_verify.o $(OBJDIR)/prf.o $(OBJDIR)/pmap_verify.o $(OBJDIR)/kcopy.o $(OBJDIR)/copy.o $(OBJDIR)/machdep.o $(OBJDIR)/earlycons.o \
 	$(OBJDIR)/bootmem.o $(OBJDIR)/pmap.o $(OBJDIR)/uvm_machdep.o \
 	$(OBJDIR)/uvm_bootstrap.o $(OBJDIR)/uvm_support.o $(OBJDIR)/bootalloc.o \
 	$(OBJDIR)/bootmap.o $(OBJDIR)/bootobject.o $(OBJDIR)/bootkm.o \
@@ -50,8 +50,10 @@ $(OBJDIR)/earlycons.o: $(RVM_DIR)/rvm/earlycons.c $(HEADERS) $(RVM_DIR)/Makefile
 $(OBJDIR)/bootmem.o: $(RVM_DIR)/rvm/bootmem.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -c "$<" -o "$@"
 
-$(OBJDIR)/pmap.o: $(RVM_DIR)/rvm/pmap.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
-	$(RVM_CC) $(BOOT_CFLAGS) $(HEADER_FLAGS) -c "$<" -o "$@"
+$(OBJDIR)/pmap.o: $(RVM_DIR)/rvm/pmap.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(@:.o=.d)" -MT "$@" -S "$<" -o "$(@:.o=.raw.s)"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(@:.o=.raw.s)" "$(@:.o=.s)" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(@:.o=.s)" -o "$@"
 
 $(OBJDIR)/uvm_machdep.o: $(RVM_DIR)/rvm/uvm_machdep.c $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -c "$<" -o "$@"
@@ -142,6 +144,18 @@ $(OBJDIR)/wait.o: $(SRC_TOP)/sys/kern/kern_sleepq.c $(SRC_TOP)/sys/kern/kern_con
 	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(@:.o=.raw.s)" "$(@:.o=.s)" --cc "$(RVM_CC)"
 	$(RVM_CC) -c "$(@:.o=.s)" -o "$@"
 
+$(OBJDIR)/prf.o: $(SRC_TOP)/sys/kern/subr_prf.c $(RVM_DIR)/stand/prf_source.py $(RVM_DIR)/stand/bootprf.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap
+	python3 "$(RVM_DIR)/stand/prf_source.py" "$<" "$(OBJDIR)/prf.c" "$(RVM_DIR)/stand/bootprf.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -DNO_KERNEL_RCSIDS -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(@:.o=.d)" -MT "$@" -S "$(OBJDIR)/prf.c" -o "$(OBJDIR)/prf.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/prf.raw.s" "$(OBJDIR)/prf.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/prf.s" -o "$@"
+
+$(OBJDIR)/softint.o: $(SRC_TOP)/sys/kern/kern_softint.c $(RVM_DIR)/stand/softint_source.py $(RVM_DIR)/stand/bootsoftint.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(BOOT_OPTIONS) $(RVM_DIR)/Makefile.bootstrap
+	python3 "$(RVM_DIR)/stand/softint_source.py" "$<" "$(OBJDIR)/softint.c" "$(RVM_DIR)/stand/bootsoftint.c"
+	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(@:.o=.d)" -MT "$@" -S "$(OBJDIR)/softint.c" -o "$(OBJDIR)/softint.raw.s"
+	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/softint.raw.s" "$(OBJDIR)/softint.s" --cc "$(RVM_CC)"
+	$(RVM_CC) -c "$(OBJDIR)/softint.s" -o "$@"
+
 $(OBJDIR)/wait_abi.o: $(RVM_DIR)/rvm/wait_abi.vma $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(VMASM) -i "$<" -o "$@" --obj
 
@@ -152,7 +166,7 @@ $(OBJDIR)/asyncirq.o: $(RVM_DIR)/rvm/asyncirq.S $(HEADERS) $(RVM_DIR)/Makefile.b
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/asyncirq.vma"
 	$(VMASM) -i "$(OBJDIR)/asyncirq.vma" -o "$@" --obj
 
-$(OBJDIR)/intr.o $(OBJDIR)/async_verify.o $(OBJDIR)/wait_verify.o: $(OBJDIR)/%.o: $(RVM_DIR)/rvm/%.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+$(OBJDIR)/intr.o $(OBJDIR)/async_verify.o $(OBJDIR)/wait_verify.o $(OBJDIR)/softint_verify.o $(OBJDIR)/pmap_verify.o $(OBJDIR)/kcopy.o: $(OBJDIR)/%.o: $(RVM_DIR)/rvm/%.c $(RVM_DIR)/stand/fhr_asm.py $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) $(BOOT_CFLAGS) -Wno-unused-parameter $(HEADER_FLAGS) -MF "$(@:.o=.d)" -MT "$@" -S "$<" -o "$(@:.o=.raw.s)"
 	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(@:.o=.raw.s)" "$(@:.o=.s)" --cc "$(RVM_CC)"
 	$(RVM_CC) -c "$(@:.o=.s)" -o "$@"
@@ -205,6 +219,10 @@ $(OBJDIR)/lwpvm.o: $(SRC_TOP)/sys/uvm/uvm_glue.c $(RVM_DIR)/stand/lwpvm_source.p
 	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/lwpvm.raw.s" "$(OBJDIR)/lwpvm.s" --cc "$(RVM_CC)"
 	$(RVM_CC) -c "$(OBJDIR)/lwpvm.s" -o "$@"
 
+$(OBJDIR)/copy.o: $(RVM_DIR)/rvm/copy.S $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
+	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/copy.vma"
+	$(VMASM) -i "$(OBJDIR)/copy.vma" -o "$@" --obj
+
 $(OBJDIR)/cpuswitch.o: $(RVM_DIR)/rvm/cpuswitch.S $(HEADERS) $(RVM_DIR)/Makefile.bootstrap | $(OBJDIR)/include/machine
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/cpuswitch.vma"
 	$(VMASM) -i "$(OBJDIR)/cpuswitch.vma" -o "$@" --obj
@@ -222,6 +240,8 @@ $(OBJDIR)/$(1).o: $(SRC_TOP)/$(2) $(RVM_DIR)/stand/fhr_asm.py $(RVM_DIR)/stand/u
 	python3 "$(RVM_DIR)/stand/fhr_asm.py" "$(OBJDIR)/$(1).raw.s" "$(OBJDIR)/$(1).s" --cc "$(RVM_CC)"
 	$(RVM_CC) -c "$(OBJDIR)/$(1).s" -o "$$@"
 endef
+$(eval $(call MI_OBJECT,strlen,common/lib/libc/string/strlen.c,))
+$(eval $(call MI_OBJECT,memchr,common/lib/libc/string/memchr.c,))
 $(eval $(call MI_OBJECT,uvm_physseg,sys/uvm/uvm_physseg.c,))
 $(eval $(call MI_OBJECT,uvm_page,sys/uvm/uvm_page.c,PAGE))
 $(eval $(call MI_OBJECT,uvm_extent,sys/kern/subr_extent.c,EXTENT))
@@ -315,5 +335,13 @@ clean:
 	rm -f "$(OBJDIR)/lwpvm.o" "$(OBJDIR)/lwpvm.c" "$(OBJDIR)/lwpvm.raw.s" "$(OBJDIR)/lwpvm.s"
 	rm -f "$(OBJDIR)/wait.o" "$(OBJDIR)/wait.c" "$(OBJDIR)/wait.raw.s" "$(OBJDIR)/wait.s" "$(OBJDIR)/wait_abi.o"
 	rm -f "$(OBJDIR)/wait_verify.o" "$(OBJDIR)/wait_verify.raw.s" "$(OBJDIR)/wait_verify.s"
+
+	rm -f "$(OBJDIR)/softint.o" "$(OBJDIR)/softint.c" "$(OBJDIR)/softint.raw.s" "$(OBJDIR)/softint.s" "$(OBJDIR)/softint_verify.o" "$(OBJDIR)/softint_verify.raw.s" "$(OBJDIR)/softint_verify.s"
+
+	rm -f "$(OBJDIR)/prf.o" "$(OBJDIR)/prf.c" "$(OBJDIR)/prf.raw.s" "$(OBJDIR)/prf.s"
+
+	rm -f "$(OBJDIR)/pmap.raw.s" "$(OBJDIR)/pmap.s" "$(OBJDIR)/pmap_verify.o" "$(OBJDIR)/pmap_verify.raw.s" "$(OBJDIR)/pmap_verify.s"
+
+	rm -f "$(OBJDIR)/kcopy.o" "$(OBJDIR)/kcopy.raw.s" "$(OBJDIR)/kcopy.s" "$(OBJDIR)/copy.o" "$(OBJDIR)/copy.vma"
 
 -include $(wildcard $(OBJDIR)/*.d)

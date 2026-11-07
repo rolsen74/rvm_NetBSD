@@ -24,9 +24,12 @@
 #include <machine/clock.h>
 #include <machine/asyncirq.h>
 #include <machine/bootwait.h>
+#include <machine/bootsoftint.h>
+#include <machine/bootprintf.h>
+#include <machine/bootcopy.h>
 
 /* 1: C, 2: console, 3: memory, 4: pmap, 5: MMU, 6/7: verified, 8/9: UVM,
- * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts, 21: kernel LWP startup, 22: directed MI switching, 23: MI run queues, 24: idle/sleep/wakeup, 25: supervisor trap return, 26: timer IRQ/HALT return, 27: repeating idle deadlines, 28: MI hardclock/callouts, 29: MI uptime, 30: LWP runtime accounting, 31: guarded u-areas, 32: MI LWP VM lifecycle, 33: RTC UTC, 34: delay, 35: wall-clock steps, 36: monotonic deadlines, 37: timed LWP sleep, 38: asynchronous IRQs, 39: MI timer preemption, 40: busy GPR/SP return, 41: asynchronous kernel services, 42: MI CVs, 43: CV timeouts, 44: kpause, 45: wait channels, 46: bintime waits. */
+ * 10: wired buffers, 11: MI map, 12: objects, 13: MI km, 14: heap, 15: pools, 16: caches, 17: anons, 18: amaps, 19: anon VM entries, 20: kernel contexts, 21: kernel LWP startup, 22: directed MI switching, 23: MI run queues, 24: idle/sleep/wakeup, 25: supervisor trap return, 26: timer IRQ/HALT return, 27: repeating idle deadlines, 28: MI hardclock/callouts, 29: MI uptime, 30: LWP runtime accounting, 31: guarded u-areas, 32: MI LWP VM lifecycle, 33: RTC UTC, 34: delay, 35: wall-clock steps, 36: monotonic deadlines, 37: timed LWP sleep, 38: asynchronous IRQs, 39: MI timer preemption, 40: busy GPR/SP return, 41: asynchronous kernel services, 42: MI CVs, 43: CV timeouts, 44: kpause, 45: wait channels, 46: bintime waits, 47: generic MI softints, 48: LWP softclock, 49: full MI format parser with corrected GCC ABI, 50: managed mappings and R/M tracking, 51: kcopy MMU-fault recovery. */
 volatile unsigned long rvm_boot_stage
     __attribute__((section(".data"))) = 0;
 static volatile unsigned int rvm_boot_fault_active
@@ -39,6 +42,11 @@ void (*rvm_boot_vectors[RVM_BOOT_NVECTORS])(void) __aligned(16)
 const char rvm_boot_banner[] = "NetBSD/RVM early bootstrap";
 
 /* Named strings avoid temporary .LC symbols lost by the current FHR tools. */
+const char rvm_msg_kcopy[] = "RVM kernel copies ready; MMU fault return and PCB recovery verified.\n";
+const char rvm_msg_pv[] = "RVM managed pmap ready; aliases, read/write tracking and page protection verified.\n";
+const char rvm_msg_printf[] = "RVM MI printf ready; stack arguments, precision and bounded buffers verified.\n";
+const char rvm_msg_softint[] = "RVM MI software interrupts ready; priority, coalescing and LWP dispatch verified.\n";
+const char rvm_msg_softclock[] = "RVM MI softclock LWP ready; IRQ callouts and CV wakeups verified.\n";
 const char rvm_msg_cvbt[] = "RVM MI bintime waits ready; timeout conversion and remaining time verified.\n";
 const char rvm_msg_cv[] = "RVM MI condition variables ready; sleep-queue handoff and signal verified.\n";
 const char rvm_msg_cvtimeout[] = "RVM MI condition timeouts ready; timeout and early-signal cancellation verified.\n";
@@ -450,6 +458,20 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	rvm_boot_stage = 45; rvm_early_puts(rvm_msg_wchan);
 	if (!rvm_cv_bintime_verify()) goto bad_platform_clock;
 	rvm_boot_stage = 46; rvm_early_puts(rvm_msg_cvbt);
+#ifndef RVM_TEST_SOFTINT_SKIP
+	if (!rvm_softint_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 47; rvm_early_puts(rvm_msg_softint);
+	if (!rvm_softclock_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 48; rvm_early_puts(rvm_msg_softclock);
+#ifdef __RVM_CALLER_ARG_HOME__
+	if (!rvm_prf_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 49; rvm_early_puts(rvm_msg_printf);
+#endif
+	if (!rvm_pmap_managed_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 50; rvm_early_puts(rvm_msg_pv);
+	if (!rvm_kcopy_verify()) goto bad_platform_clock;
+	rvm_boot_stage = 51; rvm_early_puts(rvm_msg_kcopy);
+#endif
 #endif
 #endif
 #endif

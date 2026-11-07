@@ -111,7 +111,9 @@ rvm_switch_register_test:
         move.q r4,r62
         add.q #62,r62
         rclr.q r4
+        sub.q #64,r63
         jsr cpu_switchto
+        add.q #64,r63
         move.q (8,r63),r1
         cmp.q r1,r0
         bne .Lbad

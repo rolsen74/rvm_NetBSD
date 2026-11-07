@@ -37,7 +37,7 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	long resident, wired;
 
 	rvm_normal_early_init(bi);
-	REQUIRE(rvm_boot_stage == 20 && !rvm_bootanon_fini());
+	REQUIRE(rvm_boot_stage == 32 && !rvm_bootanon_fini());
 	before = curcpu()->ci_counts[CPU_COUNT_FREEPAGES];
 	clean = curcpu()->ci_counts[CPU_COUNT_ANONCLEAN];
 	dirty = curcpu()->ci_counts[CPU_COUNT_ANONDIRTY];

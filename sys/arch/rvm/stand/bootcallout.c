@@ -1,5 +1,6 @@
 #include <machine/asyncirq.h>
 #include <machine/bootwait.h>
+#include <machine/bootsoftint.h>
 /* Included after the selected MI bodies; private layout stays in that unit. */
 #define RVM_CALLOUT_MAX 64
 static kmutex_t callout_lock_store __attribute__((section(".data"))) = { 0 };
@@ -150,4 +151,39 @@ bool callout_halt(callout_t *c, void *interlock)
 	if (dispatching || interlock != NULL) panic(rvm_callout_bad);
 	result = rvm_mi_callout_halt(c, interlock);
 	rvm_intr_resume(g); return result;
+}
+
+/* Optional normal softclock context on a dedicated generic softint LWP. */
+static void softclock_dispatch(void *arg)
+{
+	unsigned int g = rvm_intr_suspend();
+	callout_context();
+	if (arg != &callout_cpu0 || real_softclock == NULL || dispatching ||
+	    !cpu_softintr_p()) panic(rvm_callout_bad);
+	dispatching = 1;
+	callout_softclock(NULL);
+	dispatching = 0;
+	rvm_intr_resume(g);
+}
+int rvm_callout_softint_start(void)
+{
+	unsigned int g = rvm_intr_suspend();
+	callout_context();
+	if (!rvm_softint_ready() || real_softclock != NULL || dispatching || cpu_softintr_p()) {
+		rvm_intr_resume(g); return 0;
+	}
+	rvm_callout_poll();
+	real_softclock = softint_establish(SOFTINT_CLOCK | SOFTINT_MPSAFE,
+	    softclock_dispatch, &callout_cpu0);
+	rvm_intr_resume(g); return real_softclock != NULL;
+}
+int rvm_callout_softint_stop(void)
+{
+	unsigned int g = rvm_intr_suspend();
+	callout_context();
+	if (real_softclock == NULL || dispatching || cpu_softintr_p()) {
+		rvm_intr_resume(g); return 0;
+	}
+	softint_disestablish(real_softclock); real_softclock = NULL;
+	rvm_intr_resume(g); return 1;
 }
