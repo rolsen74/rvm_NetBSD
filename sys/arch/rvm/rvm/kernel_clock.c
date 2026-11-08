@@ -12,6 +12,7 @@
 #include <machine/irq.h>
 #include <machine/asyncirq.h>
 #include <machine/psl.h>
+#include <machine/cache.h>
 
 static volatile struct rvm_general_driver * const gd = (void *)RVM_GENERIC_ADDR;
 static uint64_t last_tick;
@@ -94,7 +95,7 @@ rvm_kernel_irq(uint64_t *saved)
 		.cf_intr_depth = ci->ci_intr_depth + 1,
 	};
 	KASSERT(!cf.cf_usermode ||
-	    (saved[0] & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE)) == 0);
+	    (saved[0] & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE) & ~RVM_USER_CACHE_MASK) == 0);
 
 	if (!clock_started || (frame[0] >> 48) != 0 ||
 	    vector != (channel ? RVM_TIMER2_VECTOR : RVM_TIMER_VECTOR))

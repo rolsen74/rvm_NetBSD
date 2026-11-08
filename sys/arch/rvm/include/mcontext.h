@@ -1,8 +1,9 @@
-/* Integer context layout. Process trap/signal entry is still being brought up. */
+/* Native integer and raw binary64 FPU context for signals/setcontext. */
 #ifndef _RVM_MCONTEXT_H_
 #define _RVM_MCONTEXT_H_
 
 #include <machine/int_types.h>
+#include <machine/fpu.h>
 
 #define _NGREG 66
 #define _REG_RV 0
@@ -15,6 +16,7 @@ typedef __uint64_t __greg_t;
 typedef __greg_t __gregset_t[_NGREG];
 typedef struct {
 	__gregset_t __gregs;
+	struct fpreg __fpregs;
 } mcontext_t;
 
 #define _UC_SETSTACK 0x00010000

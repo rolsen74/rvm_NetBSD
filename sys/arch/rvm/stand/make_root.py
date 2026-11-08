@@ -9,6 +9,7 @@ import shutil
 import sys
 sys.dont_write_bytecode = True
 from user.build import UserBuilder
+from user.shell import build as build_shell
 
 
 def crc16(data):
@@ -51,6 +52,8 @@ def main():
     parser.add_argument('--objdir', type=Path, required=True)
     parser.add_argument('--makefs', type=Path, required=True)
     parser.add_argument('--toolchain', type=Path, required=True)
+    parser.add_argument('--software-float', action='store_true',
+                        help='compile C arithmetic using software helpers (FPU context instructions remain enabled)')
     parser.add_argument('--install', nargs=2, action='append', default=[],
                         metavar=('HOST_FILE', 'GUEST_PATH'),
                         help='add a program to the disposable image')
@@ -62,7 +65,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='root-fixture-', dir=obj) as directory:
         work = Path(directory)
         tree = work / 'root'
-        for name in ('dev', 'etc', 'sbin', 'bin', 'usr/bin'):
+        for name in ('dev', 'etc', 'sbin', 'bin', 'usr/bin', 'tmp', 'root'):
             (tree / name).mkdir(parents=True)
         assembly = work / 'init.s'
         subprocess.run([str(prefix)+'gcc', '-nostdinc', '-I', str(root/'sys'),
@@ -101,15 +104,30 @@ def main():
         subprocess.run([str(prefix)+'ld', '-e', '_start', '-o', str(child),
                         str(work/'crt.o')] + objects, check=True)
         child.chmod(0o755)
-        users = UserBuilder(args.toolchain, work/'user')
+        users = UserBuilder(args.toolchain, work/'user', native_fpu=not args.software_float)
         users.runtime()
         users.program([root/'sys/arch/rvm/stand/user/runtime_check.c',
                        root/'sys/arch/rvm/stand/user/heap_check.c',
-                       root/'sys/arch/rvm/stand/user/environment_check.c'], tree/'sbin/runtime-check')
+                       root/'sys/arch/rvm/stand/user/environment_check.c',
+                       root/'sys/arch/rvm/stand/user/platform_check.c',
+                       root/'sys/arch/rvm/stand/user/stdio_check.c',
+                       root/'sys/arch/rvm/stand/user/context_check.c',
+                       root/'sys/arch/rvm/stand/user/jump_check.S',
+                       root/'sys/arch/rvm/stand/user/native_check.c',
+                       root/'sys/arch/rvm/stand/user/fpu_check.c',
+                       root/'sys/arch/rvm/stand/user/cache_probe.S'], tree/'sbin/runtime-check')
         users.program([root/'sys/arch/rvm/stand/user/monitor.c'], tree/'sbin/rvm-monitor')
+        users.program([root/'sys/arch/rvm/stand/user/fpu_exec.c'], tree/'sbin/fpu-exec-check')
+        users.program([root/'sys/arch/rvm/stand/user/fpu_native_check.c'], tree/'sbin/fpu-native-check',
+                      ['-mfpu', '-fno-math-errno'])
         users.program([root/'sys/arch/rvm/stand/user/echo.c'], tree/'bin/rvm-echo')
         users.program([root/'bin/sync/sync.c'], tree/'bin/sync')
         users.program([root/'usr.bin/yes/yes.c'], tree/'usr/bin/yes')
+        for name in ('echo', 'cat', 'pwd', 'rm', 'mkdir', 'rmdir', 'sleep'):
+            users.program([root/'bin'/name/(name+'.c')], tree/'bin'/name)
+        users.program([root/'bin/ls'/(name+'.c') for name in ('cmp', 'ls', 'main', 'print', 'util')],
+                      tree/'bin/ls', ['-DSMALL', '-I', str(root/'lib/libutil')])
+        build_shell(users, tree/'bin/sh')
         exported = obj/'user'
         exported.mkdir(exist_ok=True)
         for artifact in ('crt0.o', 'end.o', 'librvm.a'):
@@ -143,11 +161,17 @@ def main():
             shutil.copyfile(Path(source).resolve(), target)
             target.chmod(0o755)
         (tree/'etc/motd').write_text('Welcome to NetBSD/RVM on a real FFS root filesystem.\n')
+        (tree/'etc/passwd').write_text('root:*:0:0:System administrator:/root:/bin/sh\n')
+        (tree/'etc/group').write_text('wheel:*:0:root\n')
+        (tree/'etc/shells').write_text('/bin/sh\n')
+        shutil.copyfile(root/'sys/arch/rvm/stand/user/sh-check.sh', tree/'etc/sh-check')
         spec = work/'root.spec'
         metadata = ['. type=dir mode=0755 uid=0 gid=0']
         for path in sorted(tree.rglob('*')):
             kind = 'dir' if path.is_dir() else 'file'
             mode = '0755' if path.is_dir() or path.stat().st_mode & 0o111 else '0644'
+            if path == tree/'tmp':
+                mode = '1777'
             metadata.append(f'./{path.relative_to(tree)} type={kind} mode={mode} uid=0 gid=0')
         metadata.append('./dev/console type=char mode=0600 uid=0 gid=0 device=netbsd,240,0')
         metadata.append('./dev/tty type=char mode=0666 uid=0 gid=0 device=netbsd,241,0')
@@ -156,11 +180,11 @@ def main():
         spec.write_text('\n'.join(metadata) + '\n')
         image = work/'root-fixture.img'
         subprocess.run([str(args.makefs.resolve()), '-t', 'ffs', '-B', 'be',
-                        '-s', '16m', '-F', str(spec), '-o',
+                        '-s', '16m', '-f', '256', '-F', str(spec), '-o',
                         'version=2,bsize=16384,fsize=2048', str(image), str(tree)], check=True)
         image.replace(obj/'root-fixture.img')
     config = (root/'sys/arch/rvm/conf/vmemu.conf').read_text()
-    config += ('\n[HARDFILE]\n Address = 0x0700000300000000\n'
+    config += ('\n[HARDFILE]\n Address = 0x0700000000003000\n'
                ' File = "root-fixture.img"\n ReadOnly = 0\n End\n')
     (obj/'vm.config').write_text(config)
     (obj/'vm.diskroot.config').write_text(config)

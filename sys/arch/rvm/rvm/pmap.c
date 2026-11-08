@@ -49,11 +49,12 @@ static unsigned int pmap_guard(void)
 {
 	if (curlwp != NULL) return rvm_intr_suspend();
 	rvm_intr_disable();
-	if ((rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU) pmap_fail();
+	if ((rvm_boot_get_cr() & ~(RVM_CR_INSTCACHE | RVM_CR_TLB)) != RVM_CR_MMU) pmap_fail();
 	return UINT_MAX;
 }
 static void pmap_unguard(unsigned int guard)
 {
+	rvm_cache_sync();
 	if (guard != UINT_MAX) rvm_intr_resume(guard);
 }
 
@@ -171,7 +172,7 @@ pmap_bootstrap(void)
 			return 0;
 	}
 	/* GeneralDriver register window, uncached supervisor R/W, non-executable. */
-	if (!map_page(RVM_GENERIC_ADDR, RVM_GENERIC_ADDR,
+	if (!map_page(trunc_page(RVM_GENERIC_ADDR), trunc_page(RVM_GENERIC_ADDR),
 	    RVM_PTE_READ | RVM_PTE_WRITE))
 		return 0;
 	/* A separate VA proves translation, rather than identity-only execution. */
@@ -426,7 +427,7 @@ void
 pmap_update(pmap_t pm)
 {
 	unsigned int guard = pmap_guard();
-	if ((rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU)
+	if ((rvm_boot_get_cr() & ~(RVM_CR_INSTCACHE | RVM_CR_TLB)) != RVM_CR_MMU)
 		pmap_fail();
 #ifdef RVM_KERNEL
 	if (curlwp != NULL && curlwp->l_proc->p_vmspace->vm_map.pmap == pm &&
@@ -434,12 +435,7 @@ pmap_update(pmap_t pm)
 #else
 	if (pm != pmap_kernel()) pmap_fail();
 #endif
-	/* User execution always has I/D caches off. Optional supervisor I-cache
-	 * fetches only fixed, immutable kernel text in the shared identity map.
-	 * Dynamic executable kernel mappings require real I-cache invalidation
-	 * before they can be used with this experiment.
-	 */
-	__asm volatile("" ::: "memory");
+	/* PTE writes precede the global cache/TLB maintenance in unguard. */
 	pmap_unguard(guard);
 }
 
@@ -484,6 +480,7 @@ pmap_zero_page(paddr_t pa)
 	check_ram_page(pa, RVM_PTE_WRITE);
 	for (i = 0; i < RVM_MMU_PAGE_SIZE / sizeof(*dst); i++)
 		dst[i] = 0;
+	rvm_cache_sync();
 }
 
 void
@@ -497,6 +494,7 @@ pmap_copy_page(paddr_t srcpa, paddr_t dstpa)
 	check_ram_page(dstpa, RVM_PTE_WRITE);
 	for (i = 0; i < RVM_MMU_PAGE_SIZE / sizeof(*dst); i++)
 		dst[i] = src[i];
+	rvm_cache_sync();
 }
 
 paddr_t

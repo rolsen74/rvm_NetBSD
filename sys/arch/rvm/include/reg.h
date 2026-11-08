@@ -15,6 +15,7 @@
 #define _RVM_REG_H_
 
 #include <sys/types.h>
+#include <machine/fpu.h>
 
 #define RVM_NGREG		64
 #define RVM_REG_RET0	0
@@ -51,9 +52,6 @@ struct reg
 	uint64_t r_sr;
 };
 
-/*
- * No floating-point register structure is declared until an RVM FPU ABI
- * is defined.  NetBSD ptrace/core-dump integration must account for this.
- */
+/* struct fpreg is shared with signal/ucontext and defined in machine/fpu.h. */
 
 #endif /* _RVM_REG_H_ */

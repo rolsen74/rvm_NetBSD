@@ -2,16 +2,23 @@
 #define _LOCORE
 #include <machine/asm.h>
 #include <machine/user.h>
+#include <machine/cache.h>
         section ".text",code
         SecAlign 4
         xdef rvm_user_resume
+        xref rvm_fpu_restore
 rvm_user_resume:
-        move.q #8,r0
+        move.q #RVM_KERNEL_CR,r0
         mtctrl r0,cr
         move.q (RVM_TF_USP,r2),r0
         mtctrl r0,usp
         move.q (RVM_TF_ROOT,r2),r0
         mtctrl r0,mut
+        add.q #RVM_TF_FP,r2
+        sub.q #RVM_C_CALL_HOME,r63
+        jsr rvm_fpu_restore
+        add.q #RVM_C_CALL_HOME,r63
+        sub.q #RVM_TF_FP,r2
         move.q r2,r63
         sub.q #528,r63
         move.q r63,r3
@@ -29,7 +36,7 @@ rvm_user_resume:
         move.q r0,(r3)+
         move.q (RVM_TF_ROOT,r2),r0
         move.q r0,(r3)
-        move.q #12,r0
+        move.q #RVM_USER_CR,r0
         mtctrl r0,cr
         popm r0-r62
         rte

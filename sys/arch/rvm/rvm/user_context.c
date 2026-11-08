@@ -1,4 +1,4 @@
-/* Integer process contexts. Trap entry/return and signal delivery are separate. */
+/* Integer and FPU process contexts. Trap entry and signal delivery are separate. */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -31,10 +31,11 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mc, unsigned int *flags)
 	mc->__gregs[_REG_SP] = tf->tf_usp;
 	mc->__gregs[_REG_PC] = tf->tf_pc;
 	mc->__gregs[_REG_SR] = tf->tf_sr & PSL_ALLCC;
+	mc->__fpregs = tf->tf_fp;
 	if (l->l_proc->p_raslist != NULL &&
 	    (restart = ras_lookup(l->l_proc, (void *)tf->tf_pc)) != (void *)-1)
 		mc->__gregs[_REG_PC] = (uintptr_t)restart;
-	*flags |= _UC_CPU;
+	*flags |= _UC_CPU | _UC_FPU;
 }
 
 int
@@ -42,7 +43,10 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mc, unsigned int flags)
 {
 	struct trapframe *tf = l->l_md.md_tf;
 	if (tf == NULL || !USERMODE(tf->tf_sr)) return EINVAL;
-	if (flags & (_UC_FPU | _UC_TLSBASE)) return EINVAL;
+	if (flags & _UC_TLSBASE) return EINVAL;
+	if ((flags & _UC_FPU) &&
+	    ((mc->__fpregs.f_fpcr & ~RVM_FPCR_MASK) ||
+	     (mc->__fpregs.f_fpsr & ~RVM_FPSR_MASK))) return EINVAL;
 	if ((flags & (_UC_SETSTACK | _UC_CLRSTACK)) == (_UC_SETSTACK | _UC_CLRSTACK))
 		return EINVAL;
 	if (flags & _UC_CPU) {
@@ -59,6 +63,26 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mc, unsigned int flags)
 		else l->l_sigstk.ss_flags &= ~SS_ONSTACK;
 		mutex_exit(l->l_proc->p_lock);
 	}
+	if (flags & _UC_FPU) tf->tf_fp = mc->__fpregs;
+	return 0;
+}
+
+int
+process_read_fpregs(struct lwp *l, struct fpreg *fp, size_t *size)
+{
+	const struct trapframe *tf = l->l_md.md_tf;
+	if (tf == NULL || !USERMODE(tf->tf_sr)) return EINVAL;
+	*fp = tf->tf_fp;
+	*size = sizeof(*fp);
+	return 0;
+}
+int
+process_write_fpregs(struct lwp *l, const struct fpreg *fp, size_t size)
+{
+	struct trapframe *tf = l->l_md.md_tf;
+	if (tf == NULL || !USERMODE(tf->tf_sr) || size != sizeof(*fp) ||
+	    (fp->f_fpcr & ~RVM_FPCR_MASK) || (fp->f_fpsr & ~RVM_FPSR_MASK)) return EINVAL;
+	tf->tf_fp = *fp;
 	return 0;
 }
 

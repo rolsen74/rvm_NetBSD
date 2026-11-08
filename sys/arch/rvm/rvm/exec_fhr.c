@@ -239,12 +239,21 @@ fhr_makecmds(struct lwp *l, struct exec_package *epp)
 }
 
 MODULE(MODULE_CLASS_EXEC, exec_fhr, NULL);
+/* MI calls this unconditionally for a core-producing signal. FHR has no
+ * core format yet; a missing callback must not turn a user crash into a
+ * kernel call through NULL. */
+static int
+fhr_coredump(struct lwp *l __unused, struct coredump_iostate *io __unused)
+{
+	return EOPNOTSUPP;
+}
 static struct execsw exec_fhr_execsw = {
 	.es_hdrsz = 16,
 	.es_makecmds = fhr_makecmds,
 	.es_emul = &emul_netbsd,
 	.es_prio = EXECSW_PRIO_ANY,
 	.es_copyargs = fhr_copyargs,
+	.es_coredump = fhr_coredump,
 	.es_setregs = setregs,
 	.es_setup_stack = exec_setup_stack,
 };

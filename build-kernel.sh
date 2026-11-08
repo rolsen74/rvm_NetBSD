@@ -48,6 +48,8 @@ for name in ('cc1', 'as', 'ld'):
     path = Path(program) if '/' in program else Path(shutil.which(program) or program)
     paths.append(path)
 paths.append(Path(shutil.which(os.environ.get('VMASM', 'VMAsm')) or 'VMAsm'))
+paths.extend(Path('sys/arch/rvm/stand')/name
+             for name in ('kernel_cc.py', 'fhr_asm.py', 'kernel_link.py'))
 digest = hashlib.sha256()
 for path in paths:
     digest.update(str(path.resolve()).encode())
@@ -61,12 +63,14 @@ if not stamp.exists() or stamp.read_text() != value:
 PY
 
 ./build.sh -m rvm -U -u -O "$obj" -T "$tools" \
-    -V EXTERNAL_TOOLCHAIN="$toolchain" -V MKGDB=no makewrapper
+    -V EXTERNAL_TOOLCHAIN="$toolchain" -V RVM_TOOLCHAIN_STAMP="$RVM_TOOLCHAIN_STAMP" \
+    -V MKGDB=no makewrapper
 subset='host-mkdep compat binstall .WAIT date mktemp sed m4 yacc .WAIT lex .WAIT awk genassym lorder tsort mkdep cksum stat config'
 "$tools/bin/nbmake-rvm" -C tools SUBDIR="$subset" obj
 "$tools/bin/nbmake-rvm" -C tools SUBDIR="$subset" -j "$jobs" build_install
 ./build.sh -m rvm -U -u -j "$jobs" -O "$obj" -T "$tools" \
-    -V EXTERNAL_TOOLCHAIN="$toolchain" -V MKGDB=no "kernel=$config"
+    -V EXTERNAL_TOOLCHAIN="$toolchain" -V RVM_TOOLCHAIN_STAMP="$RVM_TOOLCHAIN_STAMP" \
+    -V MKGDB=no "kernel=$config"
 
 make -f sys/arch/rvm/Makefile.bootstrap OBJDIR="$obj/loader" \
     CROSS_COMPILE="$toolchain/bin/rvm-netbsd-" "$obj/loader/bootloader.bin"

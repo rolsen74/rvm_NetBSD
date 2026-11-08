@@ -105,3 +105,46 @@ python3 sys/arch/rvm/tests/linker.py --cross rvm-netbsd-
 
 The tests require ordinary error status 1, the missing symbol in the diagnostic,
 and no retained output executable for unresolved call and data relocations.
+
+# Single-precision moves and software floating point
+
+`rvm-softfloat-moves.patch` adds the missing SFmode move expansion to the
+maintained GCC backend. SF values occupy the low 32 bits of a GPR and move
+through the existing SImode instructions. Without this expansion, even a C
+function returning its float parameter reaches GCC's multiword move fallback
+and fails its `mode_size >= UNITS_PER_WORD` assertion on this 64-bit target.
+
+The source overlay and installed NetBSD `cc1` include the tested fix. Their
+previous versions are backed up in
+`/tmp/rvm-softfloat-toolchain-backup-20261108/`. The matching compiler source
+and build used for staging remain under `/tmp/rvm-netbsd-abi/`. `lto1` and
+other installed target compilers were not replaced; FHR LTO is not supported
+by this bootstrap build.
+
+The user runtime supplies imported compiler-rt binary32/binary64 arithmetic
+because the installed target libgcc lacks those functions. Its comparison
+and leading/trailing-zero helpers return 32-bit C int, whereas this backend's
+libcalls expect 64-bit word results. `stand/user/softfloat.c` adapts those
+results without changing the C int ABI. The generated count-helper copies
+also use the explicit 32-bit implementation to prevent recursion through
+GCC's word-sized builtin lowering. Arithmetic uses nearest-even rounding;
+these software helpers do not implement selectable rounding modes or hardware
+floating exception state.
+
+The disk-root stdio check exercises float/double arithmetic, comparisons,
+integer/floating conversions, varargs formatting, hexadecimal output, parsing,
+NaNs, infinities and the smallest binary64 subnormal in the emulator.
+
+# Native binary64 FPU
+
+`rvm-native-fpu.patch` adds `-mfpu` / `-mno-fpu` to the GCC backend. Apply it
+after the single-precision move patch. The maintained sibling backend and
+installed NetBSD driver and `cc1` include both patches. Their previous native
+FPU versions are backed up in `/tmp/rvm-native-fpu-toolchain-backup-20261108/`.
+
+Native add/subtract/multiply/divide, abs and sqrt preserve the integer-register
+calling convention and save their scratch FP registers. The user builder now
+selects `-mfpu`; the compiler default and kernel C build remain software float.
+Single precision, comparisons and conversions still use the runtime helpers.
+See [FPU integration](../../../../../doc/rvm-fpu-2026-11-08.md) for context
+preservation, rounding, limitations and the three-optimization guest test.

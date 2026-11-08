@@ -55,6 +55,13 @@ instruction_cache_check(void)
 	/* IRQs remain masked during each short pair to avoid scheduler noise.
 	 * Both modes use the same data path; only instruction fetch changes. */
 	for (unsigned run = 0; run < 3; run++) {
+#ifdef RVM_MMU_TLB
+		uint64_t walk, reference;
+		rvm_irq_set_cr(cr & ~(RVM_CR_INSTCACHE | RVM_CR_TLB));
+		start = gd->monotonic_ns;
+		reference = instruction_work(instruction_seed, 20000);
+		walk = gd->monotonic_ns - start;
+#endif
 		rvm_irq_set_cr(cr & ~RVM_CR_INSTCACHE);
 		start = gd->monotonic_ns;
 		a = instruction_work(instruction_seed, 20000);
@@ -65,6 +72,12 @@ instruction_cache_check(void)
 		b = instruction_work(instruction_seed, 20000);
 		cached = gd->monotonic_ns - start;
 		CHECK(a == b && !(rvm_boot_get_cr() & RVM_CR_DATACACHE));
+#ifdef RVM_MMU_TLB
+		CHECK(reference == a);
+		printf("RVM TLB comparison %u: walk=%llu us tlb=%llu us tlb+icache=%llu us\n",
+		    run + 1, (unsigned long long)(walk / 1000),
+		    (unsigned long long)(uncached / 1000), (unsigned long long)(cached / 1000));
+#endif
 		printf("RVM I-cache comparison %u: uncached=%llu us cached=%llu us\n",
 		    run + 1, (unsigned long long)(uncached / 1000),
 		    (unsigned long long)(cached / 1000));

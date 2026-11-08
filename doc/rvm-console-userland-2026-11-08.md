@@ -1,5 +1,9 @@
 # NetBSD/RVM console and bootstrap user runtime, 2026-11-08
 
+The later [stdio and native-shell update](rvm-stdio-shell-2026-11-08.md)
+adds the `sh` monitor command, writable shell sessions and native utilities.
+The limitations below describe the earlier bootstrap monitor.
+
 The disk-root image now reaches an interactive `rvm#` command monitor after
 the filesystem/exec tests. Keyboard input travels through VMEmu's SDL event
 queue, GeneralDriver MMIO, a NetBSD clock callout, MI tty input processing and

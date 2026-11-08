@@ -27,23 +27,6 @@ struct ld_rvm_softc {
 static char rvm_disk_name[] = "RVM hardfile";
 #define REG(sc, r) ((sc)->sc_io[(r) / sizeof(uint64_t)])
 
-static vaddr_t
-map_registers(void)
-{
-	vaddr_t va = uvm_km_alloc(kernel_map, PAGE_SIZE, 0, UVM_KMF_VAONLY | UVM_KMF_NOWAIT);
-	if (va != 0) {
-		pmap_kenter_pa(va, RVM_HF_DEFAULT_ADDRESS, UVM_PROT_RW, 0);
-		pmap_update(pmap_kernel());
-	}
-	return va;
-}
-static void
-unmap_registers(vaddr_t va)
-{
-	pmap_kremove(va, PAGE_SIZE);
-	pmap_update(pmap_kernel());
-	uvm_km_free(kernel_map, va, PAGE_SIZE, UVM_KMF_VAONLY);
-}
 static int
 ld_rvm_match(device_t parent __unused, cfdata_t cf __unused, void *aux)
 {
@@ -51,11 +34,11 @@ ld_rvm_match(device_t parent __unused, cfdata_t cf __unused, void *aux)
 	vaddr_t va;
 	int found;
 	if (strcmp(aux, "hardfile") != 0) return 0;
-	va = map_registers();
+	/* GeneralDriver and HARDFILE share the wired MMIO identity page. */
+	va = RVM_HF_DEFAULT_ADDRESS;
 	if (va == 0) return 0;
 	found = rvm_mmio_peek8((void *)va, &id) == 0 && id == RVM_HF_MAGIC &&
 	    rvm_mmio_peek8((void *)(va + RVM_HF_ABI), &abi) == 0 && abi == RVM_HF_VERSION;
-	unmap_registers(va);
 	return found;
 }
 static int
@@ -136,7 +119,7 @@ ld_rvm_attach(device_t parent __unused, device_t self, void *aux __unused)
 	struct ld_rvm_softc *sc = device_private(self);
 	struct ld_softc *ld = &sc->sc_ld;
 	ld->sc_dv = self;
-	sc->sc_kva = map_registers();
+	sc->sc_kva = RVM_HF_DEFAULT_ADDRESS;
 	if (sc->sc_kva == 0) { aprint_error(": no register VA\n"); return; }
 	sc->sc_io = (void *)sc->sc_kva;
 	if (REG(sc, RVM_HF_SECTOR_BYTES) != DEV_BSIZE ||
@@ -165,7 +148,6 @@ ld_rvm_attach(device_t parent __unused, device_t self, void *aux __unused)
 	ldattach(ld, BUFQ_DISK_DEFAULT_STRAT);
 	return;
 failed:
-	unmap_registers(sc->sc_kva);
 	sc->sc_kva = 0;
 	aprint_error(": unsupported device or insufficient resources\n");
 }

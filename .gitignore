@@ -1,4 +1,5 @@
 /obj.rvm-bootstrap/
 /obj.rvm-kernel/
 /obj.rvm-diskroot/
+/obj.rvm-diskroot-diag/
 /obj.rvm-user/

@@ -1,5 +1,19 @@
 # NetBSD/RVM bring-up
 
+The [FPU/GCC update](../../../doc/rvm-fpu-2026-11-08.md) adds native binary64
+code generation with `-mfpu`, enabled by the userland builder, and preserves
+all 64 FP registers and FPCR/FPSR across scheduling, fork/exec, signals,
+setjmp/longjmp and ptrace. Kernel C code remains compiled without `-mfpu`.
+
+The latest [userland update](../../../doc/rvm-stdio-shell-2026-11-08.md) adds
+NetBSD stdio, software floating point, native utilities and the real NetBSD sh.
+Type `sh` at the `rvm#` monitor prompt to start an interactive shell with a
+writable root; `exit 0` returns to the monitor and syncs/remounts it read-only.
+
+The [platform update](../../../doc/rvm-platform-2026-11-08.md) packs
+the register windows into one MMIO page, adds host entropy, and enables physical
+instruction caching and a TLB in the default disk-root build.
+
 The normal MI kernel builds with NetBSD config and BSD make, initializes full
 UVM and native devices, and reaches the root-device prompt in VMEmu. EARLY also
 runs a real user process that prints through NetBSD write(2), sleeps, forks,
@@ -14,12 +28,14 @@ forks/executes/waits for a GCC-compiled user program. The fixture has no libc
 dependency. A console tty and a small static user runtime now support an
 interactive `rvm#` monitor that reads files and launches C programs. NetBSD's
 allocator, environment routines, exit handlers and PATH lookup now work, and
-unchanged NetBSD `sync` and `yes` are installed in the image. Full libc,
-csu, production init and a shell remain to be ported.
+unchanged NetBSD utilities and `sh` are installed in the image. The library
+now includes FILE streams, formatting/scanning, directory traversal and
+C/POSIX locale support. Full libc/csu build integration, TLS, pthreads,
+dynamic linking and production init remain to be ported.
 See the [libc progress notes](../../../doc/rvm-libc-2026-11-08.md).
-An optional [kernel instruction-cache experiment](../../../doc/rvm-icache-2026-11-08.md)
-is available with `./build-diskroot.sh DISKROOT_ICACHE`; user/data caching
-remains disabled.
+The earlier [kernel-only instruction-cache configuration](../../../doc/rvm-icache-2026-11-08.md)
+remains available with `./build-diskroot.sh DISKROOT_ICACHE`; that configuration
+leaves user/data caching and the TLB disabled.
 See the [console/user-runtime notes](../../../doc/rvm-console-userland-2026-11-08.md).
 See the [disk-root notes](../../../doc/rvm-diskroot-2026-11-07.md) and earlier
 [user-process notes](../../../doc/rvm-user-process-2026-11-07.md).

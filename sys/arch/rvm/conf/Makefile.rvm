@@ -42,16 +42,19 @@ NORMAL_S=@echo "assemble ${.TARGET}"; \
 
 %INCLUDES
 %OBJS
-${OBJS}: ${RVM}/stand/kernel_cc.py ${RVM}/stand/fhr_asm.py
-.if defined(RVM_TOOLCHAIN_STAMP)
-${OBJS}: ${RVM_TOOLCHAIN_STAMP}
-.endif
 %CFILES
 %SFILES
 %LOAD
 %RULES
 
 .include "$S/conf/Makefile.kern.inc"
+
+# OBJS is defined by Makefile.kern.inc, after config's ALLFILES list.
+${OBJS}: ${RVM}/stand/kernel_cc.py ${RVM}/stand/fhr_asm.py
+.if defined(RVM_TOOLCHAIN_STAMP)
+${OBJS}: ${RVM_TOOLCHAIN_STAMP}
+.export RVM_TOOLCHAIN_STAMP
+.endif
 
 # The backend does not implement GCC's stack-usage hook yet.
 CFLAGS:=${CFLAGS:N-fstack-usage:N-Wstack-usage=*}

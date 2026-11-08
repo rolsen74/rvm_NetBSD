@@ -48,14 +48,18 @@ def main():
     parser.add_argument('--diskroot', action='store_true')
     parser.add_argument('--expect-icache', action='store_true',
                         help='require the experimental kernel I-cache and A/B checks')
+    parser.add_argument('--expect-accel', action='store_true',
+                        help='require physical user I-cache, TLB, entropy readiness and benchmarks')
     parser.add_argument('--ram-mib', type=int, nargs='+', default=[64, 640])
     parser.add_argument('--timeout', type=float,
-                        help='seconds per boot (default 30 for diskroot, 12 for raw I/O)')
+                        help='seconds per boot (default 60 for full userland, 12 for raw I/O)')
     parser.add_argument('--vmemu', default='VMEmu')
     args = parser.parse_args()
+    if args.expect_accel:
+        args.expect_icache = True
     if args.expect_icache and not args.diskroot:
         parser.error('--expect-icache requires --diskroot')
-    timeout = args.timeout if args.timeout is not None else (30 if args.diskroot else 12)
+    timeout = args.timeout if args.timeout is not None else (60 if args.diskroot else 12)
     obj = args.objdir.resolve()
     vm = shutil.which(args.vmemu)
     if vm is None:
@@ -85,6 +89,12 @@ def main():
                         'native static crt0, errno, variadic open, mmap, pipe and C exit verified',
                         'libc malloc/calloc/realloc/free, aligned allocations, 64 KiB heap and fork/COW verified',
                         'libc environment, DSO finalization and dynamic/reentrant atexit order verified',
+                        'host entropy/getrandom and executable cache sync, COW, warm NX and VA reuse verified',
+                        'stdio buffering, seek/EOF, memory streams, formatting, short I/O and exit flushing verified',
+                        'setjmp register/stack restoration, signal masks and user signal trampoline verified',
+                        'FPU register banks, FPCR/FPSR, scheduling, fork/exec, signals and ptrace verified',
+                        'GCC native FPU arithmetic, sqrt/abs, rounding, exceptions and FP-register preservation verified',
+                        'native utilities and sh quoting, arithmetic, pipes, redirection, substitution, globbing, traps and wait verified',
                         'unchanged NetBSD yes(1), pipe output and SIGPIPE containment verified',
                         'tty termios, canonical editing, EOF, raw input, poll and blocking wakeup verified',
                         'disk fork/exec/wait integration verified; starting console monitor',
@@ -119,11 +129,19 @@ def main():
                     for marker in checks:
                         assert marker in output, 'Missing '+marker+'\n'+output[-8000:]
                     if args.expect_icache:
-                        assert 'RVM kernel instruction cache enabled; user/data caches disabled' in output, output[-8000:]
+                        assert 'RVM kernel instruction cache enabled; data cache disabled' in output, output[-8000:]
                         timings = re.findall(r'RVM I-cache comparison \d: uncached=(\d+) us cached=(\d+) us', output)
                         assert len(timings) == 3 and all(int(a) > 0 and int(b) > 0 for a, b in timings), output[-8000:]
                         # Correctness is asserted in the guest. Timing varies
                         # with host load, so a speed threshold is not a test.
+                    if args.expect_accel:
+                        for marker in ('RVM TLB enabled (64 KiB pages, root/mode tags)',
+                                       'RVM user instruction cache enabled (physical tags)',
+                                       'rvmrnd0 at mainbus0: GeneralDriver host random source',
+                                       'entropy: ready'):
+                            assert marker in output, 'Missing '+marker+'\n'+output[-8000:]
+                        timings = re.findall(r'RVM TLB comparison \d: walk=(\d+) us tlb=(\d+) us tlb\+icache=(\d+) us', output)
+                        assert len(timings) == 3 and all(int(n) > 0 for t in timings for n in t), output[-8000:]
                     assert 'panic:' not in output and 'fatal kernel exception' not in output, output[-8000:]
                 if not args.diskroot:
                     assert digest(disk) == before, 'Disk check did not restore the host image'

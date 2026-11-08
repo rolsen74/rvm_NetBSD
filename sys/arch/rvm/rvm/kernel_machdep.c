@@ -50,8 +50,15 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 	rvm_boot_enable_mmu(rvm_boot_pmap.root);
 #ifdef RVM_KERNEL_ICACHE
 	rvm_early_puts((rvm_boot_get_cr() & RVM_CR_INSTCACHE) ?
-	    "RVM kernel instruction cache enabled; user/data caches disabled\n" :
+	    "RVM kernel instruction cache enabled; data cache disabled\n" :
 	    "RVM kernel instruction cache disabled by VMEmu\n");
+#endif
+#ifdef RVM_MMU_TLB
+    if (!(rvm_boot_get_cr() & RVM_CR_TLB)) panic("VMEmu lacks RVM TLB support");
+    rvm_early_puts("RVM TLB enabled (64 KiB pages, root/mode tags)\n");
+#endif
+#ifdef RVM_USER_ICACHE
+    rvm_early_puts("RVM user instruction cache enabled (physical tags)\n");
 #endif
 	initmsgbuf((void *)logbuf, MSGBUFSIZE);
 	cpu_info_primary.ci_curlwp = &lwp0;
@@ -99,6 +106,10 @@ rvm_boot_trap(const uint64_t *saved)
 	rvm_early_puthex((frame[0] >> 32) & 0xffff);
 	rvm_early_puts(" PC ");
 	rvm_early_puthex(frame[1]);
+	rvm_early_puts(" header ");
+	rvm_early_puthex(frame[0]);
+	rvm_early_puts(" root ");
+	rvm_early_puthex(frame[2]);
 	rvm_early_putchar('\n');
 	rvm_boot_stop();
 }

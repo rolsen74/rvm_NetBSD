@@ -6,7 +6,8 @@
 #define RVM_TF_PC 520
 #define RVM_TF_ROOT 528
 #define RVM_TF_SR 552
-#define RVM_TF_SIZE 568
+#define RVM_TF_FP 568
+#define RVM_TF_SIZE 1096
 #ifndef _LOCORE
 #include <machine/trap.h>
 struct trapframe;

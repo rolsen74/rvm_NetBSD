@@ -33,6 +33,7 @@ file-system     FFS                     # Berkeley Fast File System
 
 # RVM virtual devices. Console output is registered directly at startup.
 mainbus0        at root
+rvmrnd0         at mainbus0
 cpu0            at mainbus0
 ld0             at mainbus0             # Optional VMEmu HARDFILE at its default address
 #rvmclock0      at mainbus0             # TODO: timer

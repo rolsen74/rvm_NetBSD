@@ -38,7 +38,8 @@
 #define RVM_CR_INSTCACHE	 ( 1ULL << 1 )
 #define RVM_CR_INTERRUPT	 ( 1ULL << 2 )
 #define RVM_CR_MMU			 ( 1ULL << 3 )
-#define RVM_CR_FLAG_MASK	 0x0000000fULL
+#define RVM_CR_TLB             ( 1ULL << 4 )
+#define RVM_CR_FLAG_MASK	 0x0000001fULL
 
 /* Control-register selectors for MFCtrl/MTCtrl. */
 #define RVM_CREG_SR			 0

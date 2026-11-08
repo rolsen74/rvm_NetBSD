@@ -8,6 +8,7 @@
 #include <sys/systm.h>
 #include <sys/proc.h>
 #include <uvm/uvm.h>
+#include <machine/cache.h>
 #include <machine/mmu.h>
 #include <machine/pmap_private.h>
 
@@ -69,6 +70,7 @@ rvm_copyuser(struct vmspace *vm, vaddr_t user, void *kernel, size_t len,
 		copied += amount; user += amount;
 		if (terminated) break;
 	}
+	if (out) rvm_cache_sync();
 	if (done != NULL) *done = copied;
 	if (error == 0 && string && !terminated)
 		error = ENAMETOOLONG;

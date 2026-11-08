@@ -76,6 +76,7 @@
 
 #ifndef _LOCORE
 #include <sys/types.h>
+#include <machine/fpu.h>
 
 /*
  * Software trapframe assembled by locore.S; not the raw CPU frame.
@@ -104,6 +105,7 @@ struct trapframe
 	uint16_t tf_level; /* version 10: instruction size */
 	uint16_t tf_version;
 	uint16_t tf_reserved;
+	struct fpreg tf_fp;
 };
 
 /* Test the saved execution mode, NOT the trap handler's current mode. */

@@ -73,6 +73,14 @@ rvm_boot_enable_mmu:
         move.q #RVM_KERNEL_CR,r0
         mtctrl r0,cr
         rts
+        xdef rvm_tlb_invalidate_all
+rvm_tlb_invalidate_all:
+        cinva #1,#4
+        rts
+        xdef rvm_icache_invalidate_all
+rvm_icache_invalidate_all:
+        cinva #1,#2
+        rts
         xdef rvm_intr_disable
 rvm_intr_disable:
         mfctrl cr,r0

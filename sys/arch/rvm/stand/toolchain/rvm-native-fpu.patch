@@ -1,0 +1,84 @@
+--- a/gcc/config/rvm/rvm.md
++++ b/gcc/config/rvm/rvm.md
+@@ -50,6 +50,7 @@
+ (include "rvm-shift.md")
+ 
+ (include "rvm-brance.md")
++(include "rvm-fpu.md")
+ 
+ 
+ 
+--- a/gcc/config/rvm/rvm.opt
++++ b/gcc/config/rvm/rvm.opt
+@@ -46,3 +46,7 @@
+ ; Ignored by the compiler
+ mno-crt0
+ Target RejectNegative
++
++mfpu
++Target Mask(FPU)
++Use v0000 binary64 FPU instructions with the existing integer-register ABI.
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -500,6 +500,7 @@
+     builtin_define_std ("rvm");			\
+     builtin_define_std ("RVM");			\
+     builtin_define ("__RVM_CALLER_ARG_HOME__=64"); \
++    if (TARGET_FPU) { builtin_define ("__RVM_FPU__=1"); builtin_define ("__RVM_FPU_GPR_ABI__=1"); } \
+     builtin_define ("__RVM_BIG_ENDIAN__");		\
+   }
+ 
+--- /dev/null
++++ b/gcc/config/rvm/rvm-fpu.md
+@@ -0,0 +1,51 @@
++;; Native binary64 arithmetic, preserving the current GPR calling convention.
++;; The compiler has no allocatable FP registers yet. Preserve F0/F1, transfer
++;; operand bits through the integer stack, execute one FP operation and return
++;; the raw result to a GPR. Raw encodings work with older FHR assemblers.
++;; Balanced stack temporaries are private to this instruction sequence.
++
++(define_insn "adddf3"
++  [(set (match_operand:DF 0 "register_operand" "=r")
++        (plus:DF (match_operand:DF 1 "register_operand" "r")
++                 (match_operand:DF 2 "register_operand" "r")))
++   (clobber (reg:CC CC_REG))]
++  "TARGET_FPU"
++  ".short 0x01c2\n\t.quad 3\n\tpush.q %2\n\tpush.q %1\n\t.short 0x01c0\n\t.quad 3\n\t.short 0x01c8\n\t.byte 1,0,0\n\t.short 0x01c2\n\t.quad 1\n\tpop.q %0\n\t.short 0x01c0\n\t.quad 3")
++
++(define_insn "subdf3"
++  [(set (match_operand:DF 0 "register_operand" "=r")
++        (minus:DF (match_operand:DF 1 "register_operand" "r")
++                 (match_operand:DF 2 "register_operand" "r")))
++   (clobber (reg:CC CC_REG))]
++  "TARGET_FPU"
++  ".short 0x01c2\n\t.quad 3\n\tpush.q %2\n\tpush.q %1\n\t.short 0x01c0\n\t.quad 3\n\t.short 0x01c9\n\t.byte 1,0,0\n\t.short 0x01c2\n\t.quad 1\n\tpop.q %0\n\t.short 0x01c0\n\t.quad 3")
++
++(define_insn "muldf3"
++  [(set (match_operand:DF 0 "register_operand" "=r")
++        (mult:DF (match_operand:DF 1 "register_operand" "r")
++                 (match_operand:DF 2 "register_operand" "r")))
++   (clobber (reg:CC CC_REG))]
++  "TARGET_FPU"
++  ".short 0x01c2\n\t.quad 3\n\tpush.q %2\n\tpush.q %1\n\t.short 0x01c0\n\t.quad 3\n\t.short 0x01cb\n\t.byte 1,0,0\n\t.short 0x01c2\n\t.quad 1\n\tpop.q %0\n\t.short 0x01c0\n\t.quad 3")
++
++(define_insn "divdf3"
++  [(set (match_operand:DF 0 "register_operand" "=r")
++        (div:DF (match_operand:DF 1 "register_operand" "r")
++                 (match_operand:DF 2 "register_operand" "r")))
++   (clobber (reg:CC CC_REG))]
++  "TARGET_FPU"
++  ".short 0x01c2\n\t.quad 3\n\tpush.q %2\n\tpush.q %1\n\t.short 0x01c0\n\t.quad 3\n\t.short 0x01ca\n\t.byte 1,0,0\n\t.short 0x01c2\n\t.quad 1\n\tpop.q %0\n\t.short 0x01c0\n\t.quad 3")
++
++(define_insn "absdf2"
++  [(set (match_operand:DF 0 "register_operand" "=r")
++        (abs:DF (match_operand:DF 1 "register_operand" "r")))
++   (clobber (reg:CC CC_REG))]
++  "TARGET_FPU"
++  ".short 0x01c2\n\t.quad 1\n\tpush.q %1\n\t.short 0x01c0\n\t.quad 1\n\t.short 0x01cd\n\t.byte 0,0\n\t.short 0x01c2\n\t.quad 1\n\tpop.q %0\n\t.short 0x01c0\n\t.quad 1")
++
++(define_insn "sqrtdf2"
++  [(set (match_operand:DF 0 "register_operand" "=r")
++        (sqrt:DF (match_operand:DF 1 "register_operand" "r")))
++   (clobber (reg:CC CC_REG))]
++  "TARGET_FPU"
++  ".short 0x01c2\n\t.quad 1\n\tpush.q %1\n\t.short 0x01c0\n\t.quad 1\n\t.short 0x01cc\n\t.byte 0,0\n\t.short 0x01c2\n\t.quad 1\n\tpop.q %0\n\t.short 0x01c0\n\t.quad 1")

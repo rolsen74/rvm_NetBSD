@@ -16,6 +16,8 @@ setregs(struct lwp *l, struct exec_package *package, vaddr_t sp)
 	KASSERT(tf != NULL);
 	memset(tf, 0, sizeof(*tf));
 	tf->tf_usp = sp;
+	/* FHR crt0 passes the MI argument descriptor to static libc/csu. */
+	tf->tf_r[5] = l->l_proc->p_psstrp;
 	tf->tf_pc = package->ep_entry;
 	tf->tf_mmu_table = l->l_proc->p_vmspace->vm_map.pmap->pm_root;
 	tf->tf_ssp = (uintptr_t)tf;

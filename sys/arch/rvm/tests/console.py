@@ -19,6 +19,8 @@ def main():
                         help='compare rendered pixels before typing and after tty erase')
     parser.add_argument('--keypad', action='store_true',
                         help='type numbers, operators and Enter using actual SDL keypad keycodes')
+    parser.add_argument('--shell', action='store_true',
+                        help='exercise native interactive sh, job control and writable-root redirection')
     parser.add_argument('--command', nargs=2, action='append', default=[],
                         metavar=('COMMAND', 'EXPECTED_OUTPUT'))
     args = parser.parse_args()
@@ -68,6 +70,25 @@ def main():
         ]
         commands += [(command.encode() + b'\n', expected + '\n')
                      for command, expected in args.command]
+        commands = [(command, expected, 'rvm# ') for command, expected in commands]
+        # yes has no prompt while running; Ctrl-C is sent after its first line.
+        commands = [(command, expected, None if command.startswith(b'run /usr/bin/yes ') else prompt)
+                    for command, expected, prompt in commands]
+        if args.shell:
+            commands += [
+                (b'sh\n', '\n# ', '# '),
+                (b'echo "interactive:$((6 * 7))"\n', '\ninteractive:42\n', '# '),
+                (b'echo shell-disk > /tmp/interactive; cat /tmp/interactive | cat\n', '\nshell-disk\n', '# '),
+                (b'/usr/bin/yes shell-job\n', '\nshell-job\n', None),
+                (b'\x1a', 'Suspended', '# '),
+                (b'jobs\n', 'Suspended', '# '),
+                (b'fg\n', '\nshell-job\n', None),
+                (b'\x03', '\n# ', '# '),
+                (b'echo "signal:$?"\n', '\nsignal:130\n', '# '),
+                (b'exit 0\n', 'status=0\n', 'rvm# '),
+                (b'cat /tmp/interactive\n', '\nshell-disk\n', 'rvm# '),
+                (b'pid\n', 'monitor pid=1\n', 'rvm# '),
+            ]
         step = -1
         offset = 0
         pixel_stage = 0 if args.pixels else 6
@@ -77,7 +98,7 @@ def main():
                 keys.write(data)
         def capture(name):
             (work/'capture.request').write_text(str(work/(name+'.ppm'))+'\n')
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + (90 if args.shell else 60)
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
@@ -108,8 +129,8 @@ def main():
                     ready = step == -1 and 'rvm# ' in transcript
                     if step >= 0:
                         response = transcript.find(commands[step][1], offset)
-                        running_yes = commands[step][0] == b'run /usr/bin/yes signal-check\n'
-                        ready = response >= 0 and ('rvm# ' in transcript[response:] or running_yes)
+                        prompt = commands[step][2]
+                        ready = response >= 0 and (prompt is None or prompt in transcript[response:])
                     if ready:
                         step += 1
                         if step == len(commands): break
@@ -132,6 +153,8 @@ def main():
         assert 'panic:' not in text and 'fatal kernel exception' not in text
         assert 'console controlling tty setup failed' not in text, text[-6000:]
         assert 'environment setup failed' not in text, text[-6000:]
+        if args.shell:
+            assert 'root remount failed' not in text and 'root read-only remount failed' not in text, text[-6000:]
         print(f'PASS: real SDL keyboard, tty editing, monitor file I/O and child exec ({args.ram_mib} MiB)')
 
 

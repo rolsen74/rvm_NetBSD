@@ -34,3 +34,39 @@ ioctl:
         jmp __rvm_error
 ioctl_success:
         rts
+
+        .globl fcntl
+fcntl:
+        move.q #SYS_fcntl,r0
+        syscall
+        bcc fcntl_success
+        move.q r0,r2
+        jmp __rvm_error
+fcntl_success:
+        rts
+
+        /* Keep the return PC in the per-LWP register state. The child's
+         * calls can overwrite its former stack slot before the parent wakes. */
+        .globl __vfork14
+__vfork14:
+        move.q (r63),r9
+        add.q #8,r63
+        move.q #SYS___vfork14,r0
+        syscall
+        bcc vfork_success
+        sub.q #8,r63
+        move.q r9,(r63)
+        move.q r0,r2
+        jmp __rvm_error
+vfork_success:
+        jmp (r9)
+
+        /* sendsig preserves the ucontext pointer in callee-saved R10. */
+        .globl __rvm_sigtramp
+__rvm_sigtramp:
+        move.q r10,r2
+        move.q #SYS_setcontext,r0
+        syscall
+        move.q #127,r2
+        move.q #SYS_exit,r0
+        syscall

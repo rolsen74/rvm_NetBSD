@@ -1,4 +1,5 @@
-/* Static FHR entry. Stack layout is MI argc, argv[], NULL, envp[], NULL. */
+/* Static FHR entry. Stack: MI argc, argv[], NULL, envp[], NULL.
+ * R5 supplies the MI ps_strings pointer and remains the fourth C argument. */
         .text
         .globl _start
 _start:

@@ -116,8 +116,9 @@ _int_strtod_l(CONST char *s00, char **se, locale_t loc)
 	size_t dplen = strlen(decimalpoint);
 #endif /*USE_LOCALE}}*/
 
+	int decpt = 0;
 #ifdef Honor_FLT_ROUNDS /*{*/
-	int Rounding, decpt = 0;
+	int Rounding;
 #ifdef Trust_FLT_ROUNDS /*{{ only define this if FLT_ROUNDS really works! */
 	Rounding = Flt_Rounds;
 #else /*}{*/
@@ -211,9 +212,7 @@ _int_strtod_l(CONST char *s00, char **se, locale_t loc)
 	if (c == '.') {
 		c = *++s;
 #endif
-#ifdef Honor_FLT_ROUNDS
 		decpt = 1;
-#endif
 		if (!nd) {
 			for(; c == '0'; c = *++s)
 				nz++;

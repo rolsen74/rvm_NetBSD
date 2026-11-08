@@ -1,8 +1,12 @@
-/* Small bring-up command monitor. Full NetBSD sh still needs libc/csu work. */
+/* PID 1 bring-up monitor, with an optional native NetBSD sh child. */
 #include "rvm_user.h"
 #include <sys/errno.h>
 #include <sys/fcntl.h>
 #include <sys/ttycom.h>
+#include <sys/mount.h>
+#include <stdio.h>
+
+void sync(void);
 
 char monitor_line[256], monitor_data[512];
 char *monitor_argv[17];
@@ -59,10 +63,11 @@ main(int argc __attribute__((unused)), char **argv __attribute__((unused)),
 		puts("console controlling tty setup failed");
 	if (controlling >= 0) close(controlling);
 	if ((!getenv("PATH") && setenv("PATH", "/bin:/usr/bin", 0)) ||
+	    (!getenv("HOME") && setenv("HOME", "/root", 0)) ||
 	    (!getenv("TERM") && setenv("TERM", "dumb", 0)))
 		puts("environment setup failed");
 	puts("NetBSD/RVM console monitor ready");
-	puts("Commands: help, pid, env, set NAME VALUE, unset NAME, echo TEXT, cat /PATH, run PROGRAM [ARGS]");
+	puts("Commands: help, sh, pid, env, set NAME VALUE, unset NAME, echo TEXT, cat /PATH, run PROGRAM [ARGS]");
 	for (;;) {
 		text("rvm# ");
 		ssize_t n;
@@ -86,7 +91,7 @@ main(int argc __attribute__((unused)), char **argv __attribute__((unused)),
 		monitor_argv[count] = 0;
 		if (count == 0) continue;
 		if (!strcmp(monitor_argv[0], "help")) {
-			puts("help | pid | env | set NAME VALUE | unset NAME | echo TEXT | cat /PATH | run PROGRAM [ARGS]");
+			puts("help | sh | pid | env | set NAME VALUE | unset NAME | echo TEXT | cat /PATH | run PROGRAM [ARGS]");
 		} else if (!strcmp(monitor_argv[0], "pid")) {
 			text("monitor pid="); number(getpid()); text("\n");
 		} else if (!strcmp(monitor_argv[0], "echo")) {
@@ -103,18 +108,36 @@ main(int argc __attribute__((unused)), char **argv __attribute__((unused)),
 			puts(setenv(monitor_argv[1], monitor_argv[2], 1) ? "set failed" : "environment updated");
 		} else if (!strcmp(monitor_argv[0], "unset") && count == 2) {
 			puts(unsetenv(monitor_argv[1]) ? "unset failed" : "environment updated");
-		} else if (!strcmp(monitor_argv[0], "run") && count >= 2) {
+		} else if ((!strcmp(monitor_argv[0], "run") && count >= 2) ||
+		    (!strcmp(monitor_argv[0], "sh") && count == 1)) {
+			int shell = !strcmp(monitor_argv[0], "sh");
+			char *device = NULL;
+			char *shell_args[] = { "/bin/sh", "-i", NULL };
+			if (shell && mount("ffs", "/", MNT_UPDATE, &device, sizeof(device))) {
+				puts("root remount failed");
+				continue;
+			}
+			fflush(NULL);
 			pid_t pid = fork();
 			if (pid == 0) {
-				execvp(monitor_argv[1], &monitor_argv[1]);
+				char **args = shell ? shell_args : &monitor_argv[1];
+				execvp(args[0], args);
 				puts("exec failed");
 				_exit(127);
 			}
 			int status;
-			if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+			pid_t waited;
+			do { waited = pid < 0 ? -1 : waitpid(pid, &status, 0); }
+			while (waited < 0 && errno == EINTR && pid >= 0);
+			if (waited != pid || pid < 0) {
 				puts("fork/wait failed");
 			} else {
 				text("status="); number((unsigned)status); text("\n");
+			}
+			if (shell) {
+				sync();
+				if (mount("ffs", "/", MNT_UPDATE | MNT_RDONLY, &device, sizeof(device)))
+					puts("root read-only remount failed");
 			}
 		} else {
 			puts("Unknown command; type help.");

@@ -1,0 +1,4 @@
+# Physical instruction cache plus explicitly managed translation cache.
+include "arch/rvm/conf/DISKROOT_ICACHE"
+options RVM_USER_ICACHE
+options RVM_MMU_TLB

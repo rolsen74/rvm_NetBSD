@@ -1,6 +1,6 @@
 maxpartitions 16
 maxusers 2 8 64
-defflag opt_rvm.h RVM_EARLY_KERNEL RVM_KERNEL_ICACHE
+defflag opt_rvm.h RVM_EARLY_KERNEL RVM_KERNEL_ICACHE RVM_USER_ICACHE RVM_MMU_TLB
 defflag opt_fhr.h EXEC_FHR
 
 file arch/rvm/rvm/kernel_locore.S
@@ -16,6 +16,7 @@ file arch/rvm/rvm/kernel_pmap.c
 file arch/rvm/rvm/usercopy.c
 file arch/rvm/rvm/userio.c
 file arch/rvm/rvm/user_context.c
+file arch/rvm/rvm/fpu.S
 file arch/rvm/rvm/user_entry.S
 file arch/rvm/rvm/user_trap.c
 file arch/rvm/rvm/user_start.c
@@ -43,6 +44,9 @@ device cpu
 attach cpu at mainbus
 attach ld at mainbus with ld_rvm
 file arch/rvm/dev/ld_rvm.c ld_rvm
+device rvmrnd
+attach rvmrnd at mainbus
+file arch/rvm/dev/rnd_rvm.c rvmrnd
 file arch/rvm/rvm/earlycons.c
 file arch/rvm/rvm/bootmem.c
 file arch/rvm/rvm/pmap.c

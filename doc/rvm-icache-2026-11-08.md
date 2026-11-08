@@ -1,5 +1,9 @@
 # Kernel instruction-cache experiment — 2026-11-08
 
+Historical experiment: the [platform update](rvm-platform-2026-11-08.md)
+adds physical cache tags, instruction-cache controls, a TLB and user caching.
+The measurements and emulator limitations below describe the earlier build.
+
 `DISKROOT_ICACHE` enables VMEmu's instruction cache for the kernel's fixed,
 read-only FHR code sections. The MMU stays enabled, data caching stays off,
 and user execution stays uncached. No VMEmu changes or rebuild are required.

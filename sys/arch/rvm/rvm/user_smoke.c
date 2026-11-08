@@ -50,7 +50,7 @@ check_context(const struct rvm_exceptionframe *saved)
 	testlwp.l_proc = curlwp->l_proc;
 	testlwp.l_md.md_tf = &tf;
 	cpu_getmcontext(&testlwp, &mc, &flags);
-	CHECK(flags == (_UC_SIGMASK | _UC_CPU));
+	CHECK(flags == (_UC_SIGMASK | _UC_CPU | _UC_FPU));
 	CHECK(memcmp(mc.__gregs, saved->r, sizeof(saved->r)) == 0);
 	CHECK(mc.__gregs[_REG_SP] == VM_MAXUSER_ADDRESS);
 	CHECK(mc.__gregs[_REG_PC] == saved->pc);
@@ -81,7 +81,13 @@ check_context(const struct rvm_exceptionframe *saved)
 	invalid = mc; invalid.__gregs[_REG_SP] = VM_MAXUSER_ADDRESS + 4;
 	CHECK(cpu_setmcontext(&testlwp, &invalid, _UC_CPU) == EINVAL);
 	CHECK(cpu_setmcontext(&testlwp, &mc, _UC_CPU | _UC_TLSBASE) == EINVAL);
-	CHECK(cpu_setmcontext(&testlwp, &mc, _UC_CPU | _UC_FPU) == EINVAL);
+	CHECK(cpu_setmcontext(&testlwp, &mc, _UC_CPU | _UC_FPU) == 0);
+	invalid = mc;
+	invalid.__fpregs.f_fpcr = 4;
+	CHECK(cpu_setmcontext(&testlwp, &invalid, _UC_FPU) == EINVAL);
+	invalid = mc;
+	invalid.__fpregs.f_fpsr = 0x20;
+	CHECK(cpu_setmcontext(&testlwp, &invalid, _UC_FPU) == EINVAL);
 	CHECK(cpu_setmcontext(&testlwp, &mc, _UC_SETSTACK | _UC_CLRSTACK) == EINVAL);
 	CHECK(process_read_regs(&testlwp, &regs) == 0);
 	CHECK(regs.r_regs[0] == 42 && regs.r_regs[RVM_REG_SP] == tf.tf_usp);

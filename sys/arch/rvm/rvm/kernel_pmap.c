@@ -13,6 +13,7 @@
 #include <machine/pmap_private.h>
 #include <machine/mmu.h>
 #include <machine/asyncirq.h>
+#include <machine/cache.h>
 
 struct user_table {
 	struct user_table *next;
@@ -75,6 +76,7 @@ rvm_user_pmap_prepare(pmap_t pm)
 	KASSERT(pm != pmap_kernel());
 	if (pm->pm_root == 0) pm->pm_root = alloc_table(pm);
 	int error = pm->pm_root != 0 ? 0 : ENOMEM;
+	rvm_cache_sync();
 	rvm_intr_resume(guard);
 	return error;
 }
@@ -128,6 +130,7 @@ rvm_user_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	pte = pv != NULL ? lookup(pm, va, true) : NULL;
 	if (pte == NULL) {
 		if (*link == NULL && pv != NULL) kmem_free(pv, sizeof(*pv));
+		rvm_cache_sync();
 		rvm_intr_resume(guard);
 		if (!(flags & PMAP_CANFAIL)) panic("RVM user pmap: out of memory");
 		return ENOMEM;
@@ -149,9 +152,13 @@ rvm_user_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	if (prot & VM_PROT_READ) bits |= RVM_PTE_READ;
 	if (prot & VM_PROT_WRITE) bits |= RVM_PTE_WRITE;
 	if (prot & VM_PROT_EXECUTE) bits |= RVM_PTE_EXEC;
+#ifdef RVM_USER_ICACHE
+    if ((prot & VM_PROT_EXECUTE) && !(flags & PMAP_NOCACHE)) bits |= RVM_PTE_CACHE_WRITETHROUGH;
+#endif
 	if (flags & (VM_PROT_READ | VM_PROT_EXECUTE)) pg->mdpage.attrs |= RVM_PTE_USED_READ;
 	if (flags & VM_PROT_WRITE) pg->mdpage.attrs |= ACCESS;
 	*pte = pa | bits;
+	rvm_cache_sync();
 	rvm_intr_resume(guard);
 	return 0;
 }
@@ -181,6 +188,7 @@ rvm_user_remove(pmap_t pm, vaddr_t start, vaddr_t end)
 		if ((*link)->va >= start && (*link)->va < end) remove_mapping(pm, link);
 		else link = &(*link)->pm_next;
 	}
+	rvm_cache_sync();
 	rvm_intr_resume(guard);
 }
 
@@ -203,6 +211,7 @@ rvm_user_protect(pmap_t pm, vaddr_t start, vaddr_t end, vm_prot_t prot)
 			*pte &= ~(RVM_PTE_READ | RVM_PTE_WRITE | RVM_PTE_EXEC) | keep;
 		}
 	}
+	rvm_cache_sync();
 	rvm_intr_resume(guard);
 }
 
@@ -214,6 +223,7 @@ rvm_user_unwire(pmap_t pm, vaddr_t va)
 	KASSERT(pv != NULL && pv->wired);
 	pv->wired = 0;
 	pm->pm_stats.wired_count--;
+	rvm_cache_sync();
 	rvm_intr_resume(guard);
 }
 
@@ -254,6 +264,7 @@ pmap_remove_all(pmap_t pm)
 	unsigned int guard = rvm_intr_suspend();
 	KASSERT(pm != pmap_kernel());
 	while (pm->pm_mappings != NULL) remove_mapping(pm, &pm->pm_mappings);
+	rvm_cache_sync();
 	rvm_intr_resume(guard);
 	return false;
 }

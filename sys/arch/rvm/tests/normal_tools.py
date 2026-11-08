@@ -24,7 +24,9 @@ with tempfile.TemporaryDirectory(prefix='rvm-normal-tools-') as temporary:
     (work/'a.c').write_text('''
 static long local = 17;
 static const long * const pointers[] = { &local };
-long a(void) { return *pointers[0]; }
+static long other = 31;
+static const long *volatile current = &other;
+long a(void) { current = pointers[0]; return *current; }
 int base(void) { return 7; }
 int alias(void) __attribute__((weak,alias("base")));
 __attribute__((weak)) int choose(void) { return 5; }
@@ -92,6 +94,19 @@ stack_address:
     compile('b.c', 'b_strong.o', True)
     compile('main.c', 'main.o')
     compile('main.c', 'main_strong.o', True)
+    # GCC can place a .comm between functions at -O0. Its explicit-storage
+    # replacement must not move the following function into non-executable data.
+    (work/'common.c').write_text('int before(void) { return 1; }\n'
+                                'static long common;\n'
+                                'long after_common(void) { return ++common; }\n'
+                                'long dedicated __attribute__((section(".data.cacheline_aligned")));\n')
+    subprocess.run([str(stand/'kernel_cc.py'), '-O0', '-ffreestanding',
+                    '-fno-builtin', '-fno-pic', '-fno-pie', '-nostdinc',
+                    '-c', 'common.c', '-o', 'common.o'], cwd=work, env=env, check=True)
+    symbols = subprocess.check_output([args.cross+'nm', '-P', 'common.o'], cwd=work, text=True)
+    assert re.search(r'^after_common T ', symbols, re.MULTILINE), symbols
+    assert re.search(r'^dedicated D ', symbols, re.MULTILINE), symbols
+    print('PASS: common storage preserves the active text section', flush=True)
     subprocess.run([args.vmasm, '-i', 'entry.vma', '-o', 'entry.o', '--obj'],
                    cwd=work, check=True, stdout=subprocess.DEVNULL)
     subprocess.run([args.cross+'ar', 'crs', 'test.a', 'a.o', 'b_strong.o'],

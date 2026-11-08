@@ -13,6 +13,8 @@ char runtime_payload[] = "native runtime file\n";
 struct stat runtime_stat;
 extern int heap_check(void);
 extern int environment_check(void);
+extern int platform_check(void);
+extern int stdio_check(void);
 char *yes_argv[] = { "/usr/bin/yes", "netbsd-native-yes", 0 };
 
 int main(int, char **, char **);
@@ -77,6 +79,19 @@ main(int argc, char **argv, char **envp)
 	if (heap_error) return heap_error;
 	int environment_error = environment_check();
 	if (environment_error) return environment_error;
+	int platform_error = platform_check();
+	if (platform_error) return platform_error;
+	int stdio_error = stdio_check();
+	if (stdio_error) return stdio_error;
+	extern int context_check(void);
+	int context_error = context_check();
+	if (context_error) return context_error;
+	extern int fpu_check(void);
+	int fpu_error = fpu_check();
+	if (fpu_error) return fpu_error;
+	extern int native_check(void);
+	int native_error = native_check();
+	if (native_error) return native_error;
 	/* Run the tree's unmodified yes(1), then close its pipe and verify
 	 * native SIGPIPE containment rather than leaving an infinite writer. */
 	if (pipe(runtime_fds) != 0) return 149;

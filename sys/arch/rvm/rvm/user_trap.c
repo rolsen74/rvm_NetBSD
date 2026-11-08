@@ -26,6 +26,10 @@ __CTASSERT(offsetof(struct trapframe, tf_pc) == RVM_TF_PC);
 __CTASSERT(offsetof(struct trapframe, tf_mmu_table) == RVM_TF_ROOT);
 __CTASSERT(offsetof(struct trapframe, tf_sr) == RVM_TF_SR);
 __CTASSERT(sizeof(struct trapframe) == RVM_TF_SIZE);
+__CTASSERT(offsetof(struct trapframe, tf_fp) == RVM_TF_FP);
+__CTASSERT(offsetof(struct fpreg, f_fpcr) == RVM_FPREG_CR);
+__CTASSERT(offsetof(struct fpreg, f_fpsr) == RVM_FPREG_SR);
+__CTASSERT(sizeof(struct fpreg) == RVM_FPREG_SIZE);
 
 void
 rvm_user_vectors_init(void)
@@ -45,6 +49,9 @@ import_frame(struct rvm_exceptionframe *raw)
 	    raw->root != l->l_proc->p_vmspace->vm_map.pmap->pm_root)
 		rvm_boot_trap(raw->r);
 	memcpy(tf->tf_r, raw->r, sizeof(tf->tf_r));
+	/* Kernel C code uses integer registers only. Capture the user bank
+	 * before enabling interrupts or allowing a scheduler switch. */
+	rvm_fpu_save(&tf->tf_fp);
 	tf->tf_usp = rvm_get_user_sp();
 	tf->tf_ssp = (uintptr_t)tf;
 	tf->tf_pc = raw->pc;
@@ -94,6 +101,7 @@ export_frame(struct rvm_exceptionframe *raw, struct trapframe *tf)
 	raw->header = (raw->header & UINT64_C(0xffffffff00000000)) | tf->tf_sr;
 	rvm_set_user_sp(tf->tf_usp);
 	pmap_activate(curlwp);
+	rvm_fpu_restore(&tf->tf_fp);
 }
 
 void
@@ -101,7 +109,7 @@ rvm_user_exception(struct rvm_exceptionframe *raw)
 {
 	uint64_t cr = rvm_intr_disable();
 	KASSERT(!USERMODE(raw->header) ||
-	    (cr & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE)) == 0);
+	    (cr & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE) & ~RVM_USER_CACHE_MASK) == 0);
 	/* User fetches stay uncached; only the shared immutable kernel text
 	 * uses I-cache. Restore the original CR before returning through RTE. */
 	rvm_irq_set_cr(RVM_KERNEL_CR);

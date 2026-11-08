@@ -4,10 +4,14 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+if __package__:
+    from .libc import build as libc_objects
+else:
+    from libc import build as libc_objects
 
 
 class UserBuilder:
-    def __init__(self, toolchain, obj):
+    def __init__(self, toolchain, obj, native_fpu=True):
         self.root = Path(__file__).resolve().parents[5]
         self.stand = self.root/'sys/arch/rvm/stand'
         self.obj = Path(obj).resolve()
@@ -16,7 +20,7 @@ class UserBuilder:
         includes.mkdir(exist_ok=True)
         if not (includes/'machine').exists():
             (includes/'machine').symlink_to(self.root/'sys/arch/rvm/include', target_is_directory=True)
-        for name in ('fcntl.h', 'stdint.h'):
+        for name in ('fcntl.h', 'stdint.h', 'termios.h'):
             if not (includes/name).exists():
                 (includes/name).symlink_to(self.root/'sys/sys'/name)
         self.prefix = str(Path(toolchain).resolve()/'bin/rvm-netbsd-')
@@ -30,8 +34,17 @@ class UserBuilder:
                       '-I', str(self.root/'common/include'),
                       '-I', str(self.root/'lib/libc/include'),
                       '-I', str(self.root/'lib/csu/common'),
+                      '-I', str(self.root/'lib/libc/stdio'),
+                      '-I', str(self.root/'lib/libc/locale'),
+                      '-I', str(self.root/'lib/libc/citrus'),
+                      '-I', str(self.root/'lib/libc/gen'),
+                      '-I', str(self.root/'lib/libc/gdtoa'),
+                      '-I', str(self.root/'lib/libc/arch/rvm/gdtoa'),
+                      '-I', str(self.root/'common/lib/libc/stdlib'),
                       '-isystem', gcc_includes,
                       '-I', str(self.root/'lib/libpthread'), '-I', str(self.stand/'user')]
+        if native_fpu:
+            self.flags.append('-mfpu')
 
     def compile(self, source, target, extra=()):
         subprocess.run(['python3', str(self.stand/'kernel_cc.py')] + self.flags + list(extra) +
@@ -40,6 +53,7 @@ class UserBuilder:
     def assemble(self, source, target):
         assembly = Path(target).with_suffix('.s')
         subprocess.run([self.prefix+'gcc', '-nostdinc', '-I', str(self.root/'sys'),
+                        '-I', str(self.obj/'include'),
                         '-E', '-P', '-x', 'assembler-with-cpp', str(source),
                         '-o', str(assembly)], check=True)
         subprocess.run([self.prefix+'as', str(assembly), '-o', str(target)], check=True)
@@ -47,16 +61,22 @@ class UserBuilder:
     def runtime(self):
         self.compile(self.stand/'user/runtime.c', self.obj/'runtime.o')
         self.compile(self.stand/'user/heap.c', self.obj/'heap.o')
+        self.compile(self.stand/'user/process.c', self.obj/'process.o')
+        self.compile(self.stand/'user/passwd.c', self.obj/'passwd.o')
+        self.compile(self.stand/'user/random.c', self.obj/'random.o')
         self.assemble(self.stand/'user/syscall.S', self.obj/'syscall.o')
+        self.assemble(self.stand/'user/setjmp.S', self.obj/'setjmp.o')
+        self.assemble(self.stand/'user/fpu_regs.S', self.obj/'fpu_regs.o')
         self.assemble(self.stand/'user/crt0.S', self.obj/'crt0.o')
         self.assemble(self.stand/'user/end.S', self.obj/'end.o')
         library = self.obj/'librvm.a'
         if library.exists():
             library.unlink()
-        members = [self.obj/'runtime.o', self.obj/'heap.o', self.obj/'syscall.o']
-        for name in ('strlen', 'strcmp', 'strncmp', 'strchr', 'memcmp', 'memcpy', 'memmove', 'memset', 'strcspn', 'strspn', 'strlcpy'):
+        members = [self.obj/(name+'.o') for name in ('runtime', 'heap', 'process', 'passwd', 'random', 'syscall', 'setjmp', 'fpu_regs')]
+        for name in ('strlen', 'strcmp', 'strncmp', 'strchr', 'memcmp', 'memcpy', 'memmove', 'memset', 'strcspn', 'strspn', 'strlcpy', 'memchr', 'strnlen', 'strrchr', 'strpbrk', 'strncpy', 'strlcat', 'bzero', 'strstr', 'strcpy', 'strcat', 'strsep', 'strcasecmp', 'strncasecmp'):
             target = self.obj/(name+'.o')
-            self.compile(self.root/'common/lib/libc/string'/(name+'.c'), target)
+            self.compile(self.root/'common/lib/libc/string'/(name+'.c'), target,
+                         ['-D_LIBC'] if name in ('strlcat', 'strsep', 'strcasecmp', 'strncasecmp') else [])
             members.append(target)
         for source in ('stdlib/malloc.c', 'stdlib/atexit.c', 'stdlib/_env.c',
                        'stdlib/getenv.c', 'stdlib/setenv.c', 'stdlib/unsetenv.c',
@@ -69,13 +89,17 @@ class UserBuilder:
         target = self.obj/'rbtree.o'
         self.compile(self.root/'common/lib/libc/gen/rbtree.c', target, ['-D_LIBC'])
         members.append(target)
+        members.extend(libc_objects(self))
         subprocess.run([self.prefix+'ar', 'crs', str(library)] + list(map(str, members)), check=True)
 
-    def program(self, sources, output):
+    def program(self, sources, output, extra=()):
         objects = []
         for i, source in enumerate(sources):
             target = self.obj/f'program-{i}-{Path(source).stem}.o'
-            self.compile(source, target)
+            if Path(source).suffix == '.S':
+                self.assemble(source, target)
+            else:
+                self.compile(source, target, extra)
             objects.append(str(target))
         subprocess.run([self.prefix+'ld', '-e', '_start', '-o', str(output),
                         str(self.obj/'crt0.o')] + objects + [str(self.obj/'librvm.a'), str(self.obj/'end.o')], check=True)
@@ -88,9 +112,11 @@ def main():
     parser.add_argument('--toolchain', type=Path, default=root/'../rvm_gcc/rvm_cross_netbsd')
     parser.add_argument('--objdir', type=Path, default=root/'obj.rvm-user')
     parser.add_argument('-o', '--output', type=Path, required=True)
+    parser.add_argument('--software-float', action='store_true',
+                        help='use compiler software arithmetic helpers for comparison builds')
     parser.add_argument('sources', type=Path, nargs='+')
     args = parser.parse_args()
-    builder = UserBuilder(args.toolchain, args.objdir)
+    builder = UserBuilder(args.toolchain, args.objdir, native_fpu=not args.software_float)
     builder.runtime()
     builder.program(args.sources, args.output)
 
