@@ -1,12 +1,13 @@
 maxpartitions 16
 maxusers 2 8 64
-defflag opt_rvm.h RVM_EARLY_KERNEL
+defflag opt_rvm.h RVM_EARLY_KERNEL RVM_KERNEL_ICACHE
 defflag opt_fhr.h EXEC_FHR
 
 file arch/rvm/rvm/kernel_locore.S
 file arch/rvm/rvm/exec_fhr.c exec_fhr
 file arch/rvm/rvm/kernel_machdep.c
 file arch/rvm/rvm/kernel_cons.c
+file arch/rvm/rvm/console_tty.c
 file arch/rvm/rvm/kernel_atomic.c
 file arch/rvm/rvm/kernel_intr.c
 file arch/rvm/rvm/kernel_autoconf.c

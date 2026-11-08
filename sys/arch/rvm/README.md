@@ -11,8 +11,16 @@ The HARDFILE backend now attaches as `ld0`. DISKROOT mounts a big-endian UFS2
 root on `ld0a`, executes an FHR `/sbin/init` from disk, and opens `/dev/console`.
 That small integration init reads a file, rejects malformed executables, and
 forks/executes/waits for a GCC-compiled user program. The fixture has no libc
-dependency; NetBSD userland startup/runtime libraries and a tty driver are
-still needed for the production init and a shell.
+dependency. A console tty and a small static user runtime now support an
+interactive `rvm#` monitor that reads files and launches C programs. NetBSD's
+allocator, environment routines, exit handlers and PATH lookup now work, and
+unchanged NetBSD `sync` and `yes` are installed in the image. Full libc,
+csu, production init and a shell remain to be ported.
+See the [libc progress notes](../../../doc/rvm-libc-2026-11-08.md).
+An optional [kernel instruction-cache experiment](../../../doc/rvm-icache-2026-11-08.md)
+is available with `./build-diskroot.sh DISKROOT_ICACHE`; user/data caching
+remains disabled.
+See the [console/user-runtime notes](../../../doc/rvm-console-userland-2026-11-08.md).
 See the [disk-root notes](../../../doc/rvm-diskroot-2026-11-07.md) and earlier
 [user-process notes](../../../doc/rvm-user-process-2026-11-07.md).
 
@@ -22,7 +30,7 @@ See the [disk-root notes](../../../doc/rvm-diskroot-2026-11-07.md) and earlier
 ```
 
 This uses `obj.rvm-diskroot/` and regenerates a disposable 16 MiB root image.
-The init fixture finishes its checks and sleeps; it is not a shell prompt.
+The init fixture finishes its checks and execs the C command monitor as PID 1.
 The separate disk MMIO page consumes virtual address space, with one 64 KiB
 RAM bounce page in the driver. A normal EARLY/GENERIC boot without HARDFILE
 still recovers the absent-device probe and reaches the root-device prompt.
@@ -45,12 +53,12 @@ python3 sys/arch/rvm/tests/kernel_boot.py
 python3 sys/arch/rvm/tests/normal_tools.py
 python3 sys/arch/rvm/tests/hardfile.py
 python3 sys/arch/rvm/tests/hardfile.py --objdir obj.rvm-diskroot --diskroot
+python3 sys/arch/rvm/tests/console.py
 ```
 
 EARLY adds test fixtures; GENERIC uses the same syscall/trap/signal code.
-Boot-console keyboard input still polls GeneralDriver ASCII key-down events;
-the new console character device provides output but does not yet implement
-readable tty descriptors. Core-file output,
+The console now uses MI tty queues, canonical/raw reads, echo, termios and
+polling of GeneralDriver ASCII key-down events. Core-file output,
 TLS and floating-point contexts remain unsupported. The entropy warning is
 expected without a registered seed/RNG. The normal kernel uses slow MI softints;
 user return handles MI rescheduling and pending signals.

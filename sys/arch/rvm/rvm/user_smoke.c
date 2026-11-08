@@ -321,6 +321,7 @@ rvm_user_smoke(void)
 void
 rvm_user_probe_dispatch(struct rvm_exceptionframe *frame)
 {
+	CHECK((rvm_boot_get_cr() & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE)) == 0);
 	CHECK(probe_root != 0 && frame->root == probe_root);
 	CHECK(USERMODE(frame->header));
 	if (probe_vector != 0) {

@@ -1,0 +1,3 @@
+# Experimental cache for immutable supervisor code. User execution uncached.
+include "arch/rvm/conf/DISKROOT"
+options RVM_KERNEL_ICACHE

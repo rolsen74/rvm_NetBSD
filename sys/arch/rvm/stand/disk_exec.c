@@ -4,6 +4,7 @@
 #include <sys/syscall.h>
 extern long rvm_call(long, long, long, long, long);
 extern long rvm_mount(long, long, long, long, long, long);
+extern int tty_check(void);
 char disk_message[] = "NetBSD/RVM: GCC user executable, data relocations and execve verified\n";
 char *disk_pointer = disk_message;
 unsigned char disk_zero[131072] __attribute__((aligned(65536)));
@@ -22,6 +23,12 @@ char disk_persist_path[] = "/etc/persist";
 char disk_created_message[] = "NetBSD/RVM: FFS durable file created\n";
 char disk_persist_message[] = "NetBSD/RVM: FFS persisted file verified after reboot\n";
 char disk_script_message[] = "NetBSD/RVM: FHR shebang interpreter and argument forwarding verified\n";
+char runtime_path[] = "/sbin/runtime-check";
+char runtime_argument[] = "runtime-argument";
+char runtime_environment[] = "RVM_RUNTIME=1";
+char *runtime_argv[] = { runtime_path, runtime_argument, 0 };
+char *runtime_envp[] = { runtime_environment, 0 };
+int runtime_status;
 
 int disk_main(long, char **, char **);
 int
@@ -103,6 +110,15 @@ disk_main(long argc, char **argv, char **envp)
 		    sizeof(disk_persist_message) - 1, 0) < 0)
 			return 102;
 	}
+	long runtime_pid = rvm_call(SYS_fork, 0, 0, 0, 0);
+	if (runtime_pid == 0) {
+		rvm_call(SYS_execve, (long)runtime_path, (long)runtime_argv, (long)runtime_envp, 0);
+		return 103;
+	}
+	if (runtime_pid < 0 || rvm_call(SYS___wait450, runtime_pid, (long)&runtime_status, 0, 0) != runtime_pid)
+		return 103;
+	if (runtime_status != (43 << 8))
+		return runtime_status & 255 ? 103 : runtime_status >> 8;
 	/* Flush metadata and return the fixture to a clean read-only root
 	 * before its parent sleeps, so a normal emulator stop is repeatable. */
 	if (rvm_mount(SYS___mount50, (long)disk_fs_type, (long)disk_root_path,
@@ -111,5 +127,6 @@ disk_main(long argc, char **argv, char **envp)
 	size = sizeof(disk_io_message) - 1;
 	if (rvm_call(SYS_write, 1, (long)disk_io_message, size, 0) != size)
 		return 98;
-	return 37;
+	int tty_error = tty_check();
+	return tty_error != 0 ? tty_error : 37;
 }

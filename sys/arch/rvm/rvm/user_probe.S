@@ -10,7 +10,8 @@ rvm_user_probe:
         mfctrl sr,r10
         mfctrl mut,r11
         mfctrl usp,r12
-        pushm r10-r12
+        mfctrl cr,r13
+        pushm r10-r13
         mtctrl r2,mut
         mtctrl r4,usp
         sub.q #24,r63
@@ -18,13 +19,16 @@ rvm_user_probe:
         move.q r10,(0,r63)
         move.q r3,(8,r63)
         move.q r2,(16,r63)
+        move.q #8,r10
+        mtctrl r10,cr
         rte
         xdef rvm_user_probe_return
 rvm_user_probe_return:
-        popm r10-r12
+        popm r10-r13
         mtctrl r12,usp
         mtctrl r11,mut
         mtctrl r10,sr
+        mtctrl r13,cr
         popm r10-r62
         rts
 

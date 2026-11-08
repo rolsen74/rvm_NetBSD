@@ -1,6 +1,5 @@
-/* Minimal PID 1 for disk/exec bring-up, deliberately independent of libc.
- * It opens the real console, reads a file from FFS, and sleeps forever.
- * This is an integration fixture, not NetBSD's production init or a shell.
+/* Disk/exec bring-up PID 1, deliberately independent of libc. It opens
+ * the console, verifies FFS/native exec, then execs the C command monitor.
  */
 #define _LOCORE
 #include <sys/syscall.h>
@@ -16,7 +15,7 @@ _start:
         bne failed
         move.q #SYS_open,r0
         lea console_path,r2
-        move.q #1,r3
+        move.q #2,r3
         rclr.q r4
         syscall
         bcs failed
@@ -116,12 +115,12 @@ bad_done:
         lea child_ok_end,r4
         sub.q r3,r4
         syscall
-sleep_loop:
-        move.q #SYS___nanosleep50,r0
-        lea sleep_time,r2
-        rclr.q r3
+        move.q #SYS_execve,r0
+        lea monitor_path,r2
+        lea monitor_argv,r3
+        rclr.q r4
         syscall
-        jmp sleep_loop
+        jmp failed
 child_exec:
         lea child_argument,r16
         move.q #70000,r17
@@ -145,7 +144,7 @@ failed:
 
         .data
         .balign 8
-        .globl console_path, motd_path, hello, success, sleep_time, buffer
+        .globl console_path, motd_path, hello, success, buffer
         .globl hello_end, success_end
         .globl init_argv, bad_paths, child_path, child_argv, child_status
         .globl child_argument
@@ -154,13 +153,15 @@ console_path: .asciz "/dev/console"
 motd_path: .asciz "/etc/motd"
 hello: .ascii "NetBSD/RVM: PID 1 loaded from FHR on FFS; /dev/console opened\n"
 hello_end:
-success: .ascii "NetBSD/RVM: disk init read /etc/motd successfully; sleeping\n"
+success: .ascii "NetBSD/RVM: disk init read /etc/motd successfully\n"
 success_end:
 rejected: .ascii "NetBSD/RVM: malformed FHR executables rejected before replacing PID 1\n"
 rejected_end:
-child_ok: .ascii "NetBSD/RVM: disk fork/exec/wait integration verified; PID 1 sleeping\n"
+child_ok: .ascii "NetBSD/RVM: disk fork/exec/wait integration verified; starting console monitor\n"
 child_ok_end:
 child_path: .asciz "/sbin/exec-script"
+        .globl monitor_path, monitor_argv
+monitor_path: .asciz "/sbin/rvm-monitor"
         .globl bad_header, bad_crc, bad_reloc, bad_size
 bad_header: .asciz "/sbin/bad-header"
 bad_crc: .asciz "/sbin/bad-crc"
@@ -168,10 +169,10 @@ bad_reloc: .asciz "/sbin/bad-reloc"
 bad_size: .asciz "/sbin/bad-size"
         .balign 8
 init_argv: .quad child_path, 0
+monitor_argv: .quad monitor_path, 0
 child_argv: .quad child_path, child_argument, 0
 bad_paths: .quad bad_header, bad_crc, bad_reloc, bad_size, 0
 child_status: .long 0
         .balign 8
-sleep_time: .quad 1, 0
 buffer: .zero 256
 child_argument: .zero 70001

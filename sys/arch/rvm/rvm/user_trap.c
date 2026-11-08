@@ -16,6 +16,7 @@
 #include <machine/switch.h>
 #include <machine/pmap_private.h>
 #include <machine/mmio.h>
+#include <machine/cache.h>
 
 void rvm_user_exception_entry(void);
 static unsigned long user_interrupts;
@@ -99,6 +100,11 @@ void
 rvm_user_exception(struct rvm_exceptionframe *raw)
 {
 	uint64_t cr = rvm_intr_disable();
+	KASSERT(!USERMODE(raw->header) ||
+	    (cr & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE)) == 0);
+	/* User fetches stay uncached; only the shared immutable kernel text
+	 * uses I-cache. Restore the original CR before returning through RTE. */
+	rvm_irq_set_cr(RVM_KERNEL_CR);
 	if (!USERMODE(raw->header) && rvm_mmio_recover(raw)) {
 		rvm_irq_set_cr(cr);
 		return;

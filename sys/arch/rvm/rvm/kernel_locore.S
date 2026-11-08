@@ -2,6 +2,7 @@
 #define _LOCORE
 #include <machine/asm.h>
 #include <machine/boot.h>
+#include <machine/cache.h>
         section ".text",code
         SecAlign 4
         xref rvm_early_init
@@ -69,7 +70,7 @@ rvm_set_user_sp:
         xdef rvm_boot_enable_mmu
 rvm_boot_enable_mmu:
         mtctrl r2,mst
-        move.q #8,r0
+        move.q #RVM_KERNEL_CR,r0
         mtctrl r0,cr
         rts
         xdef rvm_intr_disable
@@ -111,7 +112,7 @@ rvm_kernel_irq_entry:
         pushm r0-r62
         mfctrl cr,r0
         pushm r0
-        move.q #8,r0
+        move.q #RVM_KERNEL_CR,r0
         mtctrl r0,cr
         move.q r63,r2
         sub.q #RVM_C_CALL_HOME,r63

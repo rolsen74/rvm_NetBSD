@@ -2,7 +2,7 @@
  * Supervisor pmap for the RVM six-level hardware walker. The initial wired
  * kernel window has preallocated tables: editing it never steals UVM memory.
  * Single CPU with IRQ-guarded transactions. Normal-kernel user translations
- * live in kernel_pmap.c; caches remain disabled.
+ * live in kernel_pmap.c. Optional I-cache covers immutable kernel text only.
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -19,6 +19,7 @@
 #include <machine/pmap.h>
 #include <machine/pmap_private.h>
 #include <machine/psl.h>
+#include <machine/cache.h>
 #include <machine/vmparam.h>
 
 struct rvm_boot_pmap rvm_boot_pmap __attribute__((section(".data"))) = { 0 };
@@ -48,7 +49,7 @@ static unsigned int pmap_guard(void)
 {
 	if (curlwp != NULL) return rvm_intr_suspend();
 	rvm_intr_disable();
-	if (rvm_boot_get_cr() != RVM_CR_MMU) pmap_fail();
+	if ((rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU) pmap_fail();
 	return UINT_MAX;
 }
 static void pmap_unguard(unsigned int guard)
@@ -141,6 +142,12 @@ ram_permissions(paddr_t pa)
 			flags |= RVM_PTE_WRITE;
 		if (s->flags & RVM_BOOT_EXEC)
 			flags |= RVM_PTE_EXEC;
+#ifdef RVM_KERNEL_ICACHE
+		/* Only the fixed loader text is cached. User mappings and dynamic
+		 * kernel mappings stay uncached; the data-cache CR bit stays clear. */
+		if ((flags & (RVM_PTE_EXEC | RVM_PTE_WRITE)) == RVM_PTE_EXEC)
+			flags |= RVM_PTE_CACHE_WRITETHROUGH;
+#endif
 		return flags;
 	}
 	/* Unallocated RAM/page tables: supervisor R/W, never executable. */
@@ -419,7 +426,7 @@ void
 pmap_update(pmap_t pm)
 {
 	unsigned int guard = pmap_guard();
-	if (rvm_boot_get_cr() != RVM_CR_MMU)
+	if ((rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU)
 		pmap_fail();
 #ifdef RVM_KERNEL
 	if (curlwp != NULL && curlwp->l_proc->p_vmspace->vm_map.pmap == pm &&
@@ -427,8 +434,10 @@ pmap_update(pmap_t pm)
 #else
 	if (pm != pmap_kernel()) pmap_fail();
 #endif
-	/* VMEmu walks tables on every access with I/D caches off (CR == 8).
-	 * There is no separate TLB in this mode. Revisit before enabling caches.
+	/* User execution always has I/D caches off. Optional supervisor I-cache
+	 * fetches only fixed, immutable kernel text in the shared identity map.
+	 * Dynamic executable kernel mappings require real I-cache invalidation
+	 * before they can be used with this experiment.
 	 */
 	__asm volatile("" ::: "memory");
 	pmap_unguard(guard);

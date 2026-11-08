@@ -93,6 +93,8 @@ rvm_kernel_irq(uint64_t *saved)
 		.cf_pc = frame[1], .cf_usermode = USERMODE(frame[0]),
 		.cf_intr_depth = ci->ci_intr_depth + 1,
 	};
+	KASSERT(!cf.cf_usermode ||
+	    (saved[0] & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE)) == 0);
 
 	if (!clock_started || (frame[0] >> 48) != 0 ||
 	    vector != (channel ? RVM_TIMER2_VECTOR : RVM_TIMER_VECTOR))

@@ -31,7 +31,8 @@ def run_vm(vm, work, env, timeout, marker):
                 if not data:
                     break
                 output.extend(data)
-                if marker.encode() in output or b'panic:' in output or b'fatal kernel exception' in output:
+                failure = max(output.find(b'panic:'), output.find(b'fatal kernel exception'))
+                if marker.encode() in output or (failure >= 0 and b'\n' in output[failure:]):
                     break
     finally:
         if process.poll() is None:
@@ -45,11 +46,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--objdir', type=Path, default=Path('obj.rvm-kernel'))
     parser.add_argument('--diskroot', action='store_true')
+    parser.add_argument('--expect-icache', action='store_true',
+                        help='require the experimental kernel I-cache and A/B checks')
     parser.add_argument('--ram-mib', type=int, nargs='+', default=[64, 640])
     parser.add_argument('--timeout', type=float,
                         help='seconds per boot (default 30 for diskroot, 12 for raw I/O)')
     parser.add_argument('--vmemu', default='VMEmu')
     args = parser.parse_args()
+    if args.expect_icache and not args.diskroot:
+        parser.error('--expect-icache requires --diskroot')
     timeout = args.timeout if args.timeout is not None else (30 if args.diskroot else 12)
     obj = args.objdir.resolve()
     vm = shutil.which(args.vmemu)
@@ -77,7 +82,13 @@ def main():
                         'FHR shebang interpreter and argument forwarding verified',
                         'FHR BSS demand-zero and writable pages verified',
                         'FFS create/write/fsync/seek/read/unlink verified',
-                        'disk fork/exec/wait integration verified; PID 1 sleeping',
+                        'native static crt0, errno, variadic open, mmap, pipe and C exit verified',
+                        'libc malloc/calloc/realloc/free, aligned allocations, 64 KiB heap and fork/COW verified',
+                        'libc environment, DSO finalization and dynamic/reentrant atexit order verified',
+                        'unchanged NetBSD yes(1), pipe output and SIGPIPE containment verified',
+                        'tty termios, canonical editing, EOF, raw input, poll and blocking wakeup verified',
+                        'disk fork/exec/wait integration verified; starting console monitor',
+                        'NetBSD/RVM console monitor ready',
                     )
                 else:
                     with disk.open('wb') as stream:
@@ -107,6 +118,12 @@ def main():
                         checks += ('FFS persisted file verified after reboot',)
                     for marker in checks:
                         assert marker in output, 'Missing '+marker+'\n'+output[-8000:]
+                    if args.expect_icache:
+                        assert 'RVM kernel instruction cache enabled; user/data caches disabled' in output, output[-8000:]
+                        timings = re.findall(r'RVM I-cache comparison \d: uncached=(\d+) us cached=(\d+) us', output)
+                        assert len(timings) == 3 and all(int(a) > 0 and int(b) > 0 for a, b in timings), output[-8000:]
+                        # Correctness is asserted in the guest. Timing varies
+                        # with host load, so a speed threshold is not a test.
                     assert 'panic:' not in output and 'fatal kernel exception' not in output, output[-8000:]
                 if not args.diskroot:
                     assert digest(disk) == before, 'Disk check did not restore the host image'

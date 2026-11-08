@@ -17,6 +17,7 @@
 #include <machine/bootcopy.h>
 #include <machine/psl.h>
 #include <machine/user.h>
+#include <machine/cache.h>
 
 char machine[] = MACHINE;
 char machine_arch[] = MACHINE_ARCH;
@@ -47,6 +48,11 @@ rvm_early_init(const struct rvm_bootinfo *bi)
 		rvm_boot_stop();
 	}
 	rvm_boot_enable_mmu(rvm_boot_pmap.root);
+#ifdef RVM_KERNEL_ICACHE
+	rvm_early_puts((rvm_boot_get_cr() & RVM_CR_INSTCACHE) ?
+	    "RVM kernel instruction cache enabled; user/data caches disabled\n" :
+	    "RVM kernel instruction cache disabled by VMEmu\n");
+#endif
 	initmsgbuf((void *)logbuf, MSGBUFSIZE);
 	cpu_info_primary.ci_curlwp = &lwp0;
 	cpu_info_primary.ci_onproc = &lwp0;

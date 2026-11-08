@@ -32,7 +32,7 @@ int rvm_kcopy_ready(void)
 }
 int rvm_kcopy_init(void)
 {
-	if (rvm_boot_get_cr() != RVM_CR_MMU || cpu_intr_p() || curlwp == NULL ||
+	if ((rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU || cpu_intr_p() || curlwp == NULL ||
 	    curlwp != curcpu()->ci_onproc || curlwp->l_addr == NULL) return 0;
 	if (initialized) return rvm_kcopy_ready();
 	rvm_boot_vectors[RVM_VECTOR_MMU_READ] = rvm_copyfault_entry;
@@ -82,7 +82,7 @@ void rvm_copyfault_dispatch(struct rvm_copyfault_frame *frame)
 	 * recovery cookie so an unrelated fault in UVM cannot masquerade as EFAULT.
 	 */
 	if (rvm_kcopy_ready() && kernel_map != NULL &&
-	    rvm_boot_get_cr() == RVM_CR_MMU && !cpu_intr_p() &&
+	    (rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) == RVM_CR_MMU && !cpu_intr_p() &&
 	    l != NULL && l == curcpu()->ci_onproc && l->l_addr != NULL &&
 	    curcpu()->ci_cpl == IPL_NONE && curcpu()->ci_mtx_count == 0 &&
 	    (header >> 48) == RVM_EF_VERSION_MMU_FAULT &&
@@ -118,7 +118,7 @@ void rvm_copyfault_dispatch(struct rvm_copyfault_frame *frame)
 		}
 	}
 #endif
-	if (!rvm_kcopy_ready() || rvm_boot_get_cr() != RVM_CR_MMU || cpu_intr_p() ||
+	if (!rvm_kcopy_ready() || (rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU || cpu_intr_p() ||
 	    l == NULL || l != curcpu()->ci_onproc || l->l_addr == NULL ||
 	    l->l_md.md_pcb != l->l_addr || l->l_md.md_irq_hold == 0 ||
 	    ((struct pcb *)lwp_getpcb(l))->pcb_onfault != rvm_kcopy_fault ||

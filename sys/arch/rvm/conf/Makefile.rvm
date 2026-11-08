@@ -31,10 +31,14 @@ RVM_REAL_CC:=${CC}
 .export RVM_REAL_CC
 CC=${RVM}/stand/kernel_cc.py
 VMASM?=VMAsm
+# config emits GNU option-symbol metadata when an opt header is included by
+# locore. FHR/VMAsm has no use for these unreferenced diagnostic symbols.
 NORMAL_S=@echo "assemble ${.TARGET}"; \
 	${RVM_REAL_CC} -E -P -x assembler-with-cpp ${CPPFLAGS} \
 	    ${.IMPSRC} -o ${.TARGET:.o=.vma} && \
-	${VMASM} -i ${.TARGET:.o=.vma} -o ${.TARGET} --obj
+	${TOOL_SED} '/^ .ifndef _KERNEL_OPT_/,/^ .endif/d' \
+	    ${.TARGET:.o=.vma} > ${.TARGET:.o=.vm} && \
+	${VMASM} -i ${.TARGET:.o=.vm} -o ${.TARGET} --obj
 
 %INCLUDES
 %OBJS

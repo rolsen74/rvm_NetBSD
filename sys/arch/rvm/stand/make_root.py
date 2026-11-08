@@ -2,9 +2,13 @@
 """Build a disposable big-endian UFS2 root containing the disk-init fixture."""
 import argparse
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import tempfile
+import shutil
+import sys
+sys.dont_write_bytecode = True
+from user.build import UserBuilder
 
 
 def crc16(data):
@@ -47,6 +51,9 @@ def main():
     parser.add_argument('--objdir', type=Path, required=True)
     parser.add_argument('--makefs', type=Path, required=True)
     parser.add_argument('--toolchain', type=Path, required=True)
+    parser.add_argument('--install', nargs=2, action='append', default=[],
+                        metavar=('HOST_FILE', 'GUEST_PATH'),
+                        help='add a program to the disposable image')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     obj = args.objdir.resolve()
@@ -55,7 +62,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='root-fixture-', dir=obj) as directory:
         work = Path(directory)
         tree = work / 'root'
-        for name in ('dev', 'etc', 'sbin'):
+        for name in ('dev', 'etc', 'sbin', 'bin', 'usr/bin'):
             (tree / name).mkdir(parents=True)
         assembly = work / 'init.s'
         subprocess.run([str(prefix)+'gcc', '-nostdinc', '-I', str(root/'sys'),
@@ -74,18 +81,39 @@ def main():
                         str(root/'sys/arch/rvm/stand/disk_exec.S'),
                         '-o', str(assembly)], check=True)
         subprocess.run([str(prefix)+'as', str(assembly), '-o', str(work/'crt.o')], check=True)
-        subprocess.run(['python3', str(root/'sys/arch/rvm/stand/kernel_cc.py'),
-                        '-O2', '-ffreestanding', '-fno-builtin', '-fno-pic',
-                        '-fno-pie', '-fno-stack-protector',
-                        '-fno-zero-initialized-in-bss', '-nostdinc',
-                        '-I', str(root/'sys'), '-c',
-                        str(root/'sys/arch/rvm/stand/disk_exec.c'),
-                        '-o', str(work/'exec.o')], check=True,
-                       env=dict(os.environ, RVM_REAL_CC=str(prefix)+'gcc'))
+        includes = work/'include'
+        includes.mkdir()
+        (includes/'machine').symlink_to(root/'sys/arch/rvm/include', target_is_directory=True)
+        objects = []
+        for source in ('disk_exec', 'tty_check'):
+            target = work/(source+'.o')
+            subprocess.run(['python3', str(root/'sys/arch/rvm/stand/kernel_cc.py'),
+                            '-O2', '-ffreestanding', '-fno-builtin', '-fno-pic',
+                            '-fno-pie', '-fno-stack-protector', '-D__NetBSD__',
+                            '-D_NETBSD_SOURCE', '-fno-zero-initialized-in-bss', '-nostdinc',
+                            '-I', str(root/'lib/libpthread'),
+                            '-I', str(includes), '-I', str(root/'sys'), '-c',
+                            str(root/'sys/arch/rvm/stand'/(source+'.c')),
+                            '-o', str(target)], check=True,
+                           env=dict(os.environ, RVM_REAL_CC=str(prefix)+'gcc'))
+            objects.append(str(target))
         child = tree/'sbin/exec-check'
         subprocess.run([str(prefix)+'ld', '-e', '_start', '-o', str(child),
-                        str(work/'crt.o'), str(work/'exec.o')], check=True)
+                        str(work/'crt.o')] + objects, check=True)
         child.chmod(0o755)
+        users = UserBuilder(args.toolchain, work/'user')
+        users.runtime()
+        users.program([root/'sys/arch/rvm/stand/user/runtime_check.c',
+                       root/'sys/arch/rvm/stand/user/heap_check.c',
+                       root/'sys/arch/rvm/stand/user/environment_check.c'], tree/'sbin/runtime-check')
+        users.program([root/'sys/arch/rvm/stand/user/monitor.c'], tree/'sbin/rvm-monitor')
+        users.program([root/'sys/arch/rvm/stand/user/echo.c'], tree/'bin/rvm-echo')
+        users.program([root/'bin/sync/sync.c'], tree/'bin/sync')
+        users.program([root/'usr.bin/yes/yes.c'], tree/'usr/bin/yes')
+        exported = obj/'user'
+        exported.mkdir(exist_ok=True)
+        for artifact in ('crt0.o', 'end.o', 'librvm.a'):
+            shutil.copyfile(work/'user'/artifact, exported/artifact)
         script = tree/'sbin/exec-script'
         script.write_text('#!/sbin/exec-check\n# Native FHR interpreter/argument integration fixture.\n')
         script.chmod(0o755)
@@ -106,14 +134,25 @@ def main():
         info = (131072).to_bytes(8, 'big') + (16).to_bytes(2, 'big') + (3).to_bytes(2, 'big')
         bss.write_bytes(header + text[16:28] + info + text[28:] + b'BSS\0END\0')
         bss.chmod(0o755)
+        for source, destination in args.install:
+            guest = PurePosixPath(destination)
+            if not guest.is_absolute() or '..' in guest.parts or str(guest) == '/':
+                parser.error('--install requires an absolute guest file path without ..')
+            target = tree.joinpath(*guest.parts[1:])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(Path(source).resolve(), target)
+            target.chmod(0o755)
         (tree/'etc/motd').write_text('Welcome to NetBSD/RVM on a real FFS root filesystem.\n')
         spec = work/'root.spec'
         metadata = ['. type=dir mode=0755 uid=0 gid=0']
         for path in sorted(tree.rglob('*')):
             kind = 'dir' if path.is_dir() else 'file'
-            mode = '0755' if path.is_dir() or path.parent.name == 'sbin' else '0644'
+            mode = '0755' if path.is_dir() or path.stat().st_mode & 0o111 else '0644'
             metadata.append(f'./{path.relative_to(tree)} type={kind} mode={mode} uid=0 gid=0')
         metadata.append('./dev/console type=char mode=0600 uid=0 gid=0 device=netbsd,240,0')
+        metadata.append('./dev/tty type=char mode=0666 uid=0 gid=0 device=netbsd,241,0')
+        metadata.append('./dev/null type=char mode=0666 uid=0 gid=0 device=netbsd,242,2')
+        metadata.append('./dev/zero type=char mode=0666 uid=0 gid=0 device=netbsd,242,12')
         spec.write_text('\n'.join(metadata) + '\n')
         image = work/'root-fixture.img'
         subprocess.run([str(args.makefs.resolve()), '-t', 'ffs', '-B', 'be',

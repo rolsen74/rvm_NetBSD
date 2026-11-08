@@ -3,7 +3,7 @@
 
 FHR relocatable symbols do not preserve local/weak binding. Give file-local
 definitions unique names and record weak definitions for kernel_link.py, which
-selects them after seeing all objects. This applies only to static kernels.
+selects them after seeing all objects. This supports static FHR binaries.
 """
 import json
 import os
@@ -17,6 +17,18 @@ from fhr_asm import normalize, raw_multiply_register
 
 
 def adapt(source, prefix):
+    # Preserve userland copyright/revision strings in ordinary read-only
+    # data. FHR has no ELF metadata section stack; these strings have no
+    # referenced labels, so collect them at the end without changing code.
+    metadata = []
+    def collect(match):
+        metadata.append(match[1])
+        return ''
+    source = re.sub(r'^\s*\.pushsection \.(?:copyright|ident),[^\n]*\n'
+                    r'((?:[ \t]*\.asci[iz][^\n]*\n)+)[ \t]*\.popsection[^\n]*\n',
+                    collect, source, flags=re.M)
+    if metadata:
+        source += '\n.section .rodata\n' + ''.join(metadata)
     # These sections carry link-time deprecation messages, not runtime data.
     # GAS/FHR has no .pushsection or ELF .gnu.warning handling.
     source = re.sub(r'^\s*\.pushsection \.gnu\.warning\.[^\n]+\n'

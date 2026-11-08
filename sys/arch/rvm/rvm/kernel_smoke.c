@@ -10,6 +10,13 @@
 #include <sys/atomic.h>
 #include <sys/pool.h>
 #include <machine/switch.h>
+#include <machine/cache.h>
+#ifdef RVM_KERNEL_ICACHE
+#include <machine/generic.h>
+#include <machine/pmap.h>
+#include <machine/asyncirq.h>
+#include <machine/psl.h>
+#endif
 
 void rvm_kernel_smoke(void);
 void rvm_user_smoke(void);
@@ -23,6 +30,48 @@ struct smoke_state {
 	callout_t timer;
 	bool done;
 };
+
+#ifdef RVM_KERNEL_ICACHE
+/* Same instructions and input, with only CR.I changed between runs. */
+static volatile uint64_t instruction_seed = 1234567;
+static uint64_t __noinline
+instruction_work(uint64_t value, unsigned count)
+{
+	while (count--) {
+		value ^= value << 7;
+		value ^= value >> 9;
+		value += 0x12345;
+	}
+	return value;
+}
+
+static void
+instruction_cache_check(void)
+{
+	volatile struct rvm_general_driver *gd = (void *)RVM_GENERIC_ADDR;
+	uint64_t saved_cr = rvm_intr_disable(), start, uncached, cached, a, b;
+	uint64_t cr = saved_cr & ~RVM_CR_INTERRUPT;
+	if (!(cr & RVM_CR_INSTCACHE)) { rvm_irq_set_cr(saved_cr); return; }
+	/* IRQs remain masked during each short pair to avoid scheduler noise.
+	 * Both modes use the same data path; only instruction fetch changes. */
+	for (unsigned run = 0; run < 3; run++) {
+		rvm_irq_set_cr(cr & ~RVM_CR_INSTCACHE);
+		start = gd->monotonic_ns;
+		a = instruction_work(instruction_seed, 20000);
+		uncached = gd->monotonic_ns - start;
+		rvm_irq_set_cr(cr | RVM_CR_INSTCACHE);
+		CHECK(rvm_boot_get_cr() == (cr | RVM_CR_INSTCACHE));
+		start = gd->monotonic_ns;
+		b = instruction_work(instruction_seed, 20000);
+		cached = gd->monotonic_ns - start;
+		CHECK(a == b && !(rvm_boot_get_cr() & RVM_CR_DATACACHE));
+		printf("RVM I-cache comparison %u: uncached=%llu us cached=%llu us\n",
+		    run + 1, (unsigned long long)(uncached / 1000),
+		    (unsigned long long)(cached / 1000));
+	}
+	rvm_irq_set_cr(saved_cr);
+}
+#endif
 
 static void
 smoke_timeout(void *arg)
@@ -46,6 +95,10 @@ rvm_kernel_smoke(void)
 	void *item;
 	int begin;
 	uint64_t oldusp;
+
+#ifdef RVM_KERNEL_ICACHE
+	instruction_cache_check();
+#endif
 
 	small = kmem_zalloc(8, KM_SLEEP);
 	large = kmem_alloc(PAGE_SIZE + 37, KM_SLEEP);

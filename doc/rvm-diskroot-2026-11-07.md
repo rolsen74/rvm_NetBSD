@@ -1,5 +1,9 @@
 # NetBSD/RVM disk-root and FHR exec integration, 2026-11-07
 
+**Later progress:** [console and user-runtime notes](rvm-console-userland-2026-11-08.md)
+add a real console tty, static C runtime and interactive monitor after these
+checks. The earlier sleeping-PID-1 description below records the prior stage.
+
 The normal kernel can mount a real big-endian UFS2 filesystem on VMEmu's
 HARDFILE disk (`ld0a`) and load `/sbin/init` through NetBSD execve. This is an
 early port with integration programs, not a complete NetBSD userland or shell.

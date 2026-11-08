@@ -46,6 +46,12 @@ rvm_early_putchar(int ch)
 		rvm_early_newline();
 	} else if (ch == '\r') {
 		column = 0;
+	} else if (ch == '\b') {
+		/* tty erase emits BS, space, BS. Move only; the following space
+		 * clears the old glyph, and the final BS restores the cursor. */
+		if (column != 0) column--;
+	} else if (ch == '\a') {
+		/* No bell device; a bell must not draw a cell or move the cursor. */
 	} else {
 		if (column == RVM_TERM_COLUMNS) {
 			rvm_early_newline();

@@ -2,50 +2,11 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
-#include <sys/uio.h>
+#include <machine/console.h>
 #include <dev/cons.h>
 #include <machine/boot.h>
 #include <machine/generic.h>
-void rvm_console_attach(void);
-
-static dev_type_open(rvmconsopen);
-static dev_type_write(rvmconswrite);
-const struct cdevsw rvmcons_cdevsw = {
-	.d_open = rvmconsopen,
-	.d_close = nullclose,
-	.d_read = noread,
-	.d_write = rvmconswrite,
-	.d_ioctl = noioctl,
-	.d_stop = nostop,
-	.d_tty = notty,
-	.d_poll = nopoll,
-	.d_mmap = nommap,
-	.d_kqfilter = nokqfilter,
-	.d_discard = nodiscard,
-	.d_flag = D_OTHER,
-};
-
-static int
-rvmconsopen(dev_t dev, int flags __unused, int mode __unused,
-    struct lwp *l __unused)
-{
-	return minor(dev) == 0 ? 0 : ENXIO;
-}
-
-static int
-rvmconswrite(dev_t dev __unused, struct uio *uio, int flags __unused)
-{
-	char buffer[128];
-	while (uio->uio_resid != 0) {
-		size_t size = MIN(sizeof(buffer), uio->uio_resid);
-		int error = uiomove(buffer, size, uio);
-		if (error != 0)
-			return error;
-		for (size_t i = 0; i < size; i++)
-			rvm_early_putchar((unsigned char)buffer[i]);
-	}
-	return 0;
-}
+extern const struct cdevsw rvmcons_cdevsw;
 
 static void
 rvm_cnputc(dev_t dev __unused, int ch)
@@ -69,10 +30,16 @@ rvm_cngetc(dev_t dev __unused)
 	}
 }
 
+static void
+rvm_cnpollc(dev_t dev __unused, int on)
+{
+	rvm_console_poll(on != 0);
+}
+
 static struct consdev rvm_cons = {
 	.cn_getc = rvm_cngetc,
 	.cn_putc = rvm_cnputc,
-	.cn_pollc = nullcnpollc,
+	.cn_pollc = rvm_cnpollc,
 	.cn_dev = NODEV,
 	.cn_pri = CN_INTERNAL,
 };

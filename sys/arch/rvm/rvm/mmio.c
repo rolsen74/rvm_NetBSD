@@ -39,7 +39,7 @@ rvm_mmio_recover(struct rvm_exceptionframe *frame)
 	    frame->pc != (uintptr_t)rvm_mmio_read || l == NULL || cpu_intr_p() ||
 	    l->l_addr == NULL || l->l_md.md_irq_hold == 0 ||
 	    ((struct pcb *)lwp_getpcb(l))->pcb_onfault != rvm_mmio_fault ||
-	    frame->root != pmap_kernel()->pm_root || rvm_boot_get_cr() != RVM_CR_MMU)
+	    frame->root != pmap_kernel()->pm_root || (rvm_boot_get_cr() & ~RVM_CR_INSTCACHE) != RVM_CR_MMU)
 		return false;
 	base = l->l_md.md_kstack_base;
 	end = base + l->l_md.md_kstack_size;
