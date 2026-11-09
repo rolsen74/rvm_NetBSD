@@ -194,3 +194,77 @@ need this behavior for protection faults and restartable COW stores.
 Physical device/bus errors are outside this guarantee. The patch also updates
 the FPU test target for `VMRun.c` and the `fpushm`/`fpopm` opcode names, and
 adds cached/uncached MMU regression checks. Run `make -j4 test-fpu` there.
+
+# GCC code generation optimizations
+
+`rvm-gcc-optimizations.patch` applies to the GCC source tree with `patch -p1`,
+after the native FPU and unsigned VAdd/VSub immediate updates. The maintained
+sibling GCC backend and installed NetBSD `cc1` include it. The previous backend
+and compiler are backed up in `/tmp/rvm-gcc-opt/`.
+
+The update reuses the Z flag for adjacent integer moves, logical operations
+and zero extensions before EQ/NE branches. Checks happen during final output,
+after scheduling; labels, calls, asm and unknown instructions stop reuse.
+Signed comparisons keep their explicit tests because extension and arithmetic
+flags need not describe the tested subword's sign or overflow.
+
+Known-zero register copies become clears of the appropriate width, and an
+adjacent constant store/register assignment shares the register's immediate.
+The latter uses the existing destination and checks address dependencies.
+Named signed/unsigned divmod expanders select the existing combined division
+instructions. Register outputs may overlap inputs because the emulator reads
+both inputs before writing either result.
+
+A leaf with no locals, outgoing area, saved registers or frame-pointer use
+omits PUSHF/POPF; argument-pointer elimination accounts for the missing frame.
+An explicit `-fno-omit-frame-pointer` now retains the frame as requested.
+The backend now describes ordinary narrow loads as preserving the other
+register bits, rather than incorrectly promising zero extension. This removes
+the EXTU.L that reload previously inserted for ordinary 32-bit loads and
+comparisons. Genuine 32-to-64-bit unsigned loads retain EXTU.L: MOVE.L preserves
+the destination's upper half.
+
+```sh
+python3 sys/arch/rvm/tests/gcc_optimizations.py
+```
+
+This checks emitted instructions and executes signed/unsigned boundary cases,
+dirty upper register bits, quotient/remainder pairs, reused constants, zero
+arguments, local frames and stack arguments in VMEmu. It runs at `-O0`, `-O2`,
+`-Os`, and `-O2 -fno-omit-frame-pointer`. Use `--compiler-dir` to test a candidate
+`cc1` without installing it, or `--baseline` to check the original compiler's
+behavior without requiring the new output patterns.
+
+# Bit operations and subword clears
+
+`rvm-gcc-bit-operations.patch` applies after the optimization patch above.
+`rvm-gas-bit-operations.patch` applies to the binutils source tree. Both use
+`patch -p1`. The maintained sibling sources and installed tools include them;
+the previous versions are backed up under `/tmp/rvm-bits/`.
+
+GAS accepts BClr/BSet/BChg/BTst, their register forms, and their compact
+immediate forms, with unsuffixed and `.q` spellings. Immediate bit numbers
+are in 0..63. For example, `& 0xfffffff7` becomes `vbclr #3,src,dst`:
+the instruction takes a bit number rather than a mask.
+
+GCC selects constant and variable bit clear/set/change instructions and fuses
+single-bit EQ/NE branches into bit tests. Register operations can implement
+narrow C values, but the general memory forms are restricted to actual 64-bit
+accesses. Big-endian GCC extract positions are converted to hardware bit
+numbers, which count from the least significant bit.
+
+Masks that clear a complete low byte, word or long use the corresponding
+RCLR. For example, `& 0xffff0000U` uses RCLR.W. A target instruction attribute
+blocks whole-result Z reuse for these subword clears and for bit operations:
+the former describe only the cleared subword, and the latter describe the
+old bit. A later branch on the whole result therefore keeps its test.
+
+```sh
+python3 sys/arch/rvm/tests/bit_tools.py
+python3 sys/arch/rvm/tests/bit_ops.py
+```
+
+The first test checks exact encodings, malformed operands and a
+GAS/VMAsm/VMDis round trip. The second executes all bit positions, old-bit
+flags, result branches, memory-width guards and subword clears at `-O0`,
+`-O2` and `-Os`. The top bit may use a shorter sign test when appropriate.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot the minimal native image with the production kernel to a login prompt."""
+"""Boot a disposable copy of the native image and optionally exercise login."""
 import argparse
 import os
 from pathlib import Path
@@ -20,12 +20,21 @@ def main():
     parser.add_argument('--early', action='store_true',
                         help='require the EARLY idle/HALT and timed-CV regression instead of a production-only boot')
     parser.add_argument('--ram-mib', type=int, default=64)
-    parser.add_argument('--timeout', type=float, default=90)
+    parser.add_argument('--timeout', type=float,
+                        help='total seconds (default: 300 with login, otherwise 90)')
     parser.add_argument('--idle-seconds', type=float, default=0,
                         help='measure host CPU use after reaching the login prompt')
     parser.add_argument('--max-idle-cpu', type=float,
                         help='maximum CPU seconds per wall second during the idle sample')
+    parser.add_argument('--login', action='store_true',
+                        help='authenticate root and run a shell command on the copied image')
+    parser.add_argument('--login-count', type=int, default=2,
+                        help='successful logins on the same copied disk (default: 2)')
     args = parser.parse_args()
+    if args.timeout is None:
+        args.timeout = 300 if args.login else 90
+    if args.login_count < 1:
+        parser.error('--login-count must be positive')
     source = args.objdir.resolve()/'native-root'
     with tempfile.TemporaryDirectory(prefix='rvm-native-root-') as directory:
         boot = Path(directory)
@@ -35,16 +44,35 @@ def main():
         (boot/'vm.config').write_text(re.sub(r'Size = \d+', f'Size = {args.ram_mib * 16}',
                                             (source/'vm.config').read_text(), count=1))
         env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy')
+        if args.login:
+            injector = boot/'keyboard.so'
+            subprocess.run(['cc', '-shared', '-fPIC', '-O2',
+                            str(Path(__file__).with_name('keyboard_events.c')),
+                            '-ldl', '-lSDL2', '-o', str(injector)], check=True)
+            fifo = boot/'keys'
+            os.mkfifo(fifo)
+            env.update(LD_PRELOAD=str(injector), RVM_TEST_KEYFILE=str(fifo))
         process = subprocess.Popen(['stdbuf', '-oL', '-eL', shutil.which(args.vmemu), '-c', 'vm.config'],
             cwd=boot, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         output = bytearray()
         markers = ('NetBSD/RVM native root: writable FFS, native init and shell ready', 'login: ')
         if args.early:
             markers += ('RVM normal kernel: idle HALT and timer wakeup verified',)
-        deadline = time.monotonic()+args.timeout
-        log = source/f'boot-{args.ram_mib}.log'
+        started = time.monotonic()
+        deadline = started+args.timeout
+        suffix = '-'+args.kernel_objdir.resolve().name if args.kernel_objdir else ''
+        log = source/f'{"login" if args.login else "boot"}-{args.ram_mib}{suffix}.log'
         idle_start = idle_cpu = None
         idle_ratio = None
+        steps = []
+        if args.login:
+            password = os.environ.get('RVM_TEST_PASSWORD', 'password').encode()+b'\n'
+            for count in range(1, args.login_count+1):
+                command = f"id; printf 'RVM root login %s verified\\n' {count}; exit\n"
+                steps += [('login: ', b'root\n'), ('Password:', password),
+                          ('# ', command.encode()),
+                          (f'RVM root login {count} verified', b'')]
+        stage = offset = 0
         def cpu_seconds():
             # /proc process accounting includes the emulator's CPU, GUI and timer threads.
             fields = Path(f'/proc/{process.pid}/stat').read_text().rsplit(')', 1)[1].split()
@@ -61,14 +89,27 @@ def main():
                         log.write_bytes(output)
                     transcript = output.decode(errors='replace').replace('\r', '')
                     if all(marker in transcript for marker in markers):
-                        if args.idle_seconds <= 0:
-                            break
-                        if idle_start is None:
-                            idle_cpu = cpu_seconds()
-                            idle_start = time.monotonic()
-                        elapsed = time.monotonic()-idle_start
-                        if elapsed >= args.idle_seconds:
+                        if args.idle_seconds > 0 and idle_ratio is None:
+                            if idle_start is None:
+                                idle_cpu = cpu_seconds()
+                                idle_start = time.monotonic()
+                            elapsed = time.monotonic()-idle_start
+                            if elapsed < args.idle_seconds:
+                                continue
                             idle_ratio = (cpu_seconds()-idle_cpu)/elapsed
+                        if args.login and stage < len(steps):
+                            expected, keys = steps[stage]
+                            found = transcript.find(expected, offset)
+                            if found >= 0:
+                                offset = found+len(expected)
+                                print(f'Login stage {stage+1}/{len(steps)}: {expected!r}, '
+                                      f'wall={time.monotonic()-started:.1f}s, '
+                                      f'CPU={cpu_seconds():.1f}s', flush=True)
+                                if keys:
+                                    with fifo.open('wb', buffering=0) as stream:
+                                        stream.write(keys)
+                                stage += 1
+                        if not args.login or stage == len(steps):
                             break
                     if 'panic:' in transcript:
                         break
@@ -83,6 +124,9 @@ def main():
         assert 'panic:' not in transcript and 'fatal kernel exception' not in transcript
         if not args.early:
             assert 'Hello from a NetBSD/RVM user process' not in transcript
+        if args.login:
+            assert stage == len(steps), f'Login stopped at stage {stage}/{len(steps)}:\n'+transcript[-10000:]
+            assert transcript.count('uid=0(root)') >= args.login_count, transcript[-5000:]
         if args.idle_seconds > 0:
             assert idle_ratio is not None, 'Idle sample did not complete: '+transcript[-3000:]
             print(f'Idle host CPU: {idle_ratio*100:.1f}% of one core over {elapsed:.1f}s', flush=True)
@@ -90,6 +134,8 @@ def main():
                 assert idle_ratio <= args.max_idle_cpu, f'Idle CPU ratio {idle_ratio:.3f} exceeds {args.max_idle_cpu:.3f}'
     kernel = 'EARLY kernel idle/HALT checks' if args.early else 'production kernel'
     print(f'PASS: {kernel} and minimal native init/rc/getty root ({args.ram_mib} MiB)')
+    if args.login:
+        print(f'PASS: {args.login_count} authenticated root logins, shell commands and logout on the copied production image')
 
 
 if __name__ == '__main__':

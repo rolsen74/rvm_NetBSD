@@ -1,0 +1,98 @@
+--- a/gas/config/tc-rvm.c
++++ b/gas/config/tc-rvm.c
+@@ -376,6 +376,7 @@
+ 	AT_JmpMode,
+ 	AT_S8,
+ 	AT_U8,
++	AT_Bit,
+ };
+ 
+ // Disk structure
+@@ -1012,6 +1013,33 @@
+ 	  { "rfstore.q", Opcode_RFStore_q, AT_FReg, AT_IReg, AT_None, AT_None },
+ 	  { "vfload.q", Opcode_VFLoad_q, AT_S8, AT_FReg, AT_None, AT_None },
+ 
++
++	  /* Bit operations are implicitly quad-sized. */
++	  { "bclr", Opcode_BClr, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "bclr.q", Opcode_BClr, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "rbclr", Opcode_RBClr, AT_IReg, AT_IReg, AT_IReg, AT_None },
++	  { "rbclr.q", Opcode_RBClr, AT_IReg, AT_IReg, AT_IReg, AT_None },
++	  { "vbclr", Opcode_VBClr, AT_Bit, AT_IReg, AT_IReg, AT_None },
++	  { "vbclr.q", Opcode_VBClr, AT_Bit, AT_IReg, AT_IReg, AT_None },
++	  { "bset", Opcode_BSet, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "bset.q", Opcode_BSet, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "rbset", Opcode_RBSet, AT_IReg, AT_IReg, AT_IReg, AT_None },
++	  { "rbset.q", Opcode_RBSet, AT_IReg, AT_IReg, AT_IReg, AT_None },
++	  { "vbset", Opcode_VBSet, AT_Bit, AT_IReg, AT_IReg, AT_None },
++	  { "vbset.q", Opcode_VBSet, AT_Bit, AT_IReg, AT_IReg, AT_None },
++	  { "bchg", Opcode_BChg, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "bchg.q", Opcode_BChg, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "rbchg", Opcode_RBChg, AT_IReg, AT_IReg, AT_IReg, AT_None },
++	  { "rbchg.q", Opcode_RBChg, AT_IReg, AT_IReg, AT_IReg, AT_None },
++	  { "vbchg", Opcode_VBChg, AT_Bit, AT_IReg, AT_IReg, AT_None },
++	  { "vbchg.q", Opcode_VBChg, AT_Bit, AT_IReg, AT_IReg, AT_None },
++	  { "btst", Opcode_BTst, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "btst.q", Opcode_BTst, AT_SrcMode, AT_DstMode, AT_None, AT_None },
++	  { "rbtst", Opcode_RBTst, AT_IReg, AT_IReg, AT_None, AT_None },
++	  { "rbtst.q", Opcode_RBTst, AT_IReg, AT_IReg, AT_None, AT_None },
++	  { "vbtst", Opcode_VBTst, AT_Bit, AT_IReg, AT_None, AT_None },
++	  { "vbtst.q", Opcode_VBTst, AT_Bit, AT_IReg, AT_None, AT_None },
++
+ 	  { NULL, 0x0000, AT_None, AT_None, AT_None, AT_None } };
+ 
+ static struct OStruct2 ** rvm_Opcodes;
+@@ -1606,6 +1634,7 @@
+ 			break;
+ 		}
+ 
++		case AT_Bit:
+ 		case AT_U8:
+ 		{
+ 			if ( ! rvm_read_u8 ( argbuf, &p, &v ) )
+@@ -1613,6 +1642,8 @@
+ 				as_fatal ( "Error parsing ireg" );
+ 			}
+ 
++			if ( at == AT_Bit && v >= 64 )
++				as_fatal ( "Bit index must be in 0..63" );
+ 			if ( outbuf )
+ 			{
+ 				outbuf[o] = v;
+@@ -1706,12 +1737,14 @@
+ 
+ 	outpos = rvm_fill_arg ( op, argbuf, outbuf, &argpos, outpos, op->Arg4 );
+ 
+-	if ( op->OpcodeID == Opcode_MfCtrl || op->OpcodeID == Opcode_MtCtrl )
++	if ( op->OpcodeID == Opcode_MfCtrl || op->OpcodeID == Opcode_MtCtrl
++         || ( op->OpcodeID >= Opcode_BClr && op->OpcodeID <= Opcode_RBTst )
++         || ( op->OpcodeID >= Opcode_VBClr && op->OpcodeID <= Opcode_VBTst ) )
+ 	{
+ 		while ( argbuf[argpos] == ' ' || argbuf[argpos] == '\t' )
+ 			argpos++;
+ 		if ( argbuf[argpos] && argbuf[argpos] != ';' )
+-			as_fatal ( "Unexpected trailing control-register operands" );
++			as_fatal ( "Unexpected trailing operands" );
+ 	}
+ 
+ 	return ( outpos );
+--- a/gas/config/rvm_parse.c
++++ b/gas/config/rvm_parse.c
+@@ -863,6 +863,17 @@
+ 		in.pos	 = p;
+ 	}
+ 
++	/* General bit instructions use a bit number, then a quad-sized
++	   register/memory value. Reject invalid literal indices and destinations. */
++	if ( OpcodeID >= Opcode_BClr && OpcodeID <= Opcode_BTst && cmdid >= OAM_56 )
++	{
++		if ( *outpos != 2 )
++			goto bailout;
++		if ( in.Value.X_op == O_constant
++			&& ( in.Value.X_add_number < 0 || in.Value.X_add_number >= 64 ) )
++			goto bailout;
++	}
++
+ 	/* FStore's integer side must be writable. */
+ 	if ( OpcodeID >= Opcode_FStore_w && OpcodeID <= Opcode_FStore_q
+ 		&& cmdid >= OAM_56 )

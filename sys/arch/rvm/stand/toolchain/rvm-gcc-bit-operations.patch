@@ -1,0 +1,345 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -36,6 +36,7 @@
+ #include "diagnostic-core.h"
+ #include "output.h"
+ #include "opts.h"
++#include "insn-attr.h"
+ #include "stor-layout.h"
+ #include "varasm.h"
+ #include "calls.h"
+@@ -391,6 +392,36 @@
+   return "";
+ }
+ 
++/* Inspect only the bits defined by this integer mode. */
++int
++rvm_bit_index (rtx mask, machine_mode mode, bool invert)
++{
++  if (!CONST_INT_P (mask))
++    return -1;
++  unsigned HOST_WIDE_INT value = UINTVAL (mask);
++  if (invert)
++    value = ~value;
++  return exact_log2 (value & GET_MODE_MASK (mode));
++}
++
++/* Clearing a low subword preserves all the other bits, like these masks,
++   but sets Z from that cleared subword rather than the whole result. */
++int
++rvm_low_clear_size (rtx mask, machine_mode mode)
++{
++  if (!CONST_INT_P (mask))
++    return 0;
++  unsigned HOST_WIDE_INT full = GET_MODE_MASK (mode);
++  unsigned HOST_WIDE_INT value = UINTVAL (mask) & full;
++  if (GET_MODE_BITSIZE (mode) > 8 && value == (full & ~HOST_WIDE_INT_UC (255)))
++    return 'b';
++  if (GET_MODE_BITSIZE (mode) > 16 && value == (full & ~HOST_WIDE_INT_UC (65535)))
++    return 'w';
++  if (GET_MODE_BITSIZE (mode) > 32 && value == (full & ~HOST_WIDE_INT_UC (0xffffffff)))
++    return 'l';
++  return 0;
++}
++
+ /* Only reuse Z for adjacent, integer instructions with a single SET.
+    Labels, calls, inline asm and multi-instruction patterns are barriers.
+    Do this at final output, after scheduling and register allocation, so no
+@@ -402,7 +433,8 @@
+       || !REG_P (operands[1]) || operands[2] != const0_rtx)
+     return false;
+   rtx_insn *prev = prev_nonnote_nondebug_insn (insn);
+-  if (!prev || !NONJUMP_INSN_P (prev) || GET_CODE (PATTERN (prev)) != SET)
++  if (!prev || !NONJUMP_INSN_P (prev) || GET_CODE (PATTERN (prev)) != SET
++      || get_attr_rvm_result_z (prev) == RVM_RESULT_Z_NO)
+     return false;
+   rtx set = PATTERN (prev), dst = SET_DEST (set), src = SET_SRC (set);
+   machine_mode mode = GET_MODE (operands[1]);
+@@ -471,6 +503,21 @@
+ 	return mode == QImode || mode == HImode || mode == SImode || mode == DImode;
+ }
+ 
++static bool
++rvm_dynamic_bit_mask_p (rtx x, bool invert)
++{
++  if (invert && GET_CODE (x) == ROTATE)
++    return XEXP (x, 0) == GEN_INT (-2) && REG_P (XEXP (x, 1));
++  if (invert)
++    {
++      if (GET_CODE (x) != NOT)
++        return false;
++      x = XEXP (x, 0);
++    }
++  return GET_CODE (x) == ASHIFT && XEXP (x, 0) == const1_rtx
++    && REG_P (XEXP (x, 1));
++}
++
+ /* Worker function for TARGET_RTX_COSTS.
+ 
+    Prefer direct v* immediate forms over preloading constants into a
+@@ -482,6 +529,14 @@
+ {
+ 	switch ( GET_CODE ( x ) )
+ 	{
++        case ZERO_EXTRACT:
++          if (CONST_INT_P (XEXP (x, 1)) && INTVAL (XEXP (x, 1)) == 1)
++            {
++              *total = COSTS_N_INSNS (1);
++              return true;
++            }
++          return false;
++
+ 		case AND:
+ 		case IOR:
+ 		case XOR:
+@@ -493,7 +548,21 @@
+ 		case ASHIFTRT:
+ 		case ROTATERT:
+ 		{
+-			rtx rhs = XEXP ( x, 1 );
++            rtx rhs = XEXP ( x, 1 );
++            if (SCALAR_INT_MODE_P (mode)
++                && (GET_CODE (x) == AND || GET_CODE (x) == IOR || GET_CODE (x) == XOR))
++              {
++                if ((CONST_INT_P (rhs)
++                     && (rvm_bit_index (rhs, mode, GET_CODE (x) == AND) >= 0
++                         || (GET_CODE (x) == AND && rvm_low_clear_size (rhs, mode))))
++                    || (mode == DImode
++                        && (rvm_dynamic_bit_mask_p (XEXP (x, 0), GET_CODE (x) == AND)
++                            || rvm_dynamic_bit_mask_p (rhs, GET_CODE (x) == AND))))
++                  {
++                    *total = COSTS_N_INSNS (1);
++                    return true;
++                  }
++              }
+ 
+ 			//
+ 			// Unsigned 8bit - 3 Args
+--- a/gcc/config/rvm/rvm.md
++++ b/gcc/config/rvm/rvm.md
+@@ -6,6 +6,8 @@
+ (define_constants
+   [(SP_REG 63)
+    (CC_REG 67)])
++
++(define_attr "rvm_result_z" "yes,no" (const_string "yes"))
+ 
+ ;; Returns 1 if OP is a SYMBOL_REF.
+ (define_predicate "symbol_ref_operand"
+@@ -59,6 +61,10 @@
+           (umod:RVM_INT (match_dup 1) (match_dup 2)))])]
+   "")
+ 
++(define_predicate "rvm_eqne_operator" (match_code "eq,ne"))
++
++(include "rvm-bits.md")
++
+ ;; Vcmds first, Rcmds next
+ (include "rvm-inst-v.md")
+ (include "rvm-inst-r.md")
+--- a/gcc/config/rvm/rvm-protos.h
++++ b/gcc/config/rvm/rvm-protos.h
+@@ -28,3 +28,6 @@
+ 
+ extern bool rvm_branch_uses_z (rtx_insn *, rtx *);
+ extern bool rvm_zero_copy_p (rtx_insn *, rtx);
++
++extern int rvm_bit_index (rtx, machine_mode, bool);
++extern int rvm_low_clear_size (rtx, machine_mode);
+--- /dev/null
++++ b/gcc/config/rvm/rvm-bits.md
+@@ -0,0 +1,194 @@
++;; Bit opcodes are quad-sized and set Z from the OLD bit.  Narrow register
++;; results may use them, but narrow memory references must never become a
++;; quad-sized access.  Mark every such result to prevent whole-result Z reuse.
++
++(define_insn "rvm_clear_low<mode>"
++  [(set (match_operand:RVM_INT 0 "register_operand" "=r")
++        (and:RVM_INT (match_operand:RVM_INT 1 "register_operand" "0")
++                     (match_operand:RVM_INT 2 "const_int_operand" "n")))]
++  "rvm_low_clear_size (operands[2], <MODE>mode) != 0"
++{
++  switch (rvm_low_clear_size (operands[2], <MODE>mode))
++    {
++    case 'b': return "rclr.b\t%0";
++    case 'w': return "rclr.w\t%0";
++    case 'l': return "rclr.l\t%0";
++    default: gcc_unreachable ();
++    }
++}
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bclr<mode>_const"
++  [(set (match_operand:RVM_INT 0 "nonimmediate_operand" "=r,m")
++        (and:RVM_INT (match_operand:RVM_INT 1 "nonimmediate_operand" "r,0")
++                       (match_operand:RVM_INT 2 "const_int_operand" "n,n")))]
++  "rvm_bit_index (operands[2], <MODE>mode, true) >= 0
++   && (<MODE>mode == DImode || (REG_P (operands[0]) && REG_P (operands[1])))"
++{
++  operands[3] = GEN_INT (rvm_bit_index (operands[2], <MODE>mode, true));
++  return REG_P (operands[0]) ? "vbclr\t%3,%1,%0" : "bclr\t%3,%0";
++}
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bclrdi_dynamic"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (and:DI (match_operand:DI 1 "nonimmediate_operand" "r,0")
++                  (not:DI (ashift:DI (const_int 1) (match_operand:DI 2 "register_operand" "r,r")))))]
++  ""
++  "@
++   rbclr\t%2,%1,%0
++   bclr\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bset<mode>_const"
++  [(set (match_operand:RVM_INT 0 "nonimmediate_operand" "=r,m")
++        (ior:RVM_INT (match_operand:RVM_INT 1 "nonimmediate_operand" "r,0")
++                       (match_operand:RVM_INT 2 "const_int_operand" "n,n")))]
++  "rvm_bit_index (operands[2], <MODE>mode, false) >= 0
++   && (<MODE>mode == DImode || (REG_P (operands[0]) && REG_P (operands[1])))"
++{
++  operands[3] = GEN_INT (rvm_bit_index (operands[2], <MODE>mode, false));
++  return REG_P (operands[0]) ? "vbset\t%3,%1,%0" : "bset\t%3,%0";
++}
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bsetdi_dynamic"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (ior:DI (match_operand:DI 1 "nonimmediate_operand" "r,0")
++                  (ashift:DI (const_int 1) (match_operand:DI 2 "register_operand" "r,r"))))]
++  ""
++  "@
++   rbset\t%2,%1,%0
++   bset\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bchg<mode>_const"
++  [(set (match_operand:RVM_INT 0 "nonimmediate_operand" "=r,m")
++        (xor:RVM_INT (match_operand:RVM_INT 1 "nonimmediate_operand" "r,0")
++                       (match_operand:RVM_INT 2 "const_int_operand" "n,n")))]
++  "rvm_bit_index (operands[2], <MODE>mode, false) >= 0
++   && (<MODE>mode == DImode || (REG_P (operands[0]) && REG_P (operands[1])))"
++{
++  operands[3] = GEN_INT (rvm_bit_index (operands[2], <MODE>mode, false));
++  return REG_P (operands[0]) ? "vbchg\t%3,%1,%0" : "bchg\t%3,%0";
++}
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bchgdi_dynamic"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (xor:DI (match_operand:DI 1 "nonimmediate_operand" "r,0")
++                  (ashift:DI (const_int 1) (match_operand:DI 2 "register_operand" "r,r"))))]
++  ""
++  "@
++   rbchg\t%2,%1,%0
++   bchg\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++;; Fuse the mask and its EQ/NE consumer. No intermediate boolean is needed.
++(define_insn "rvm_btst_branch<mode>"
++  [(set (pc)
++        (if_then_else
++          (match_operator 0 "rvm_eqne_operator"
++            [(and:RVM_INT (match_operand:RVM_INT 1 "nonimmediate_operand" "r,m")
++                          (match_operand:RVM_INT 2 "const_int_operand" "n,n"))
++             (const_int 0)])
++          (label_ref (match_operand 3 "" "")) (pc)))
++   (clobber (reg:CC CC_REG))]
++  "rvm_bit_index (operands[2], <MODE>mode, false) >= 0
++   && (<MODE>mode == DImode || REG_P (operands[1]))"
++{
++  operands[4] = GEN_INT (rvm_bit_index (operands[2], <MODE>mode, false));
++  output_asm_insn (REG_P (operands[1]) ? "vbtst\t%4,%1" : "btst\t%4,%1", operands);
++  return GET_CODE (operands[0]) == EQ ? "beq\t%3" : "bne\t%3";
++})
++
++(define_insn "rvm_btst_dynamic_branch"
++  [(set (pc)
++        (if_then_else
++          (match_operator 0 "rvm_eqne_operator"
++            [(and:DI (match_operand:DI 1 "nonimmediate_operand" "r,m")
++                     (ashift:DI (const_int 1)
++                                (match_operand:DI 2 "register_operand" "r,r")))
++             (const_int 0)])
++          (label_ref (match_operand 3 "" "")) (pc)))
++   (clobber (reg:CC CC_REG))]
++  ""
++{
++  output_asm_insn (REG_P (operands[1]) ? "rbtst\t%2,%1" : "btst\t%2,%1", operands);
++  return GET_CODE (operands[0]) == EQ ? "beq\t%3" : "bne\t%3";
++})
++
++(define_insn "rvm_btst_extract_branch<mode>"
++  [(set (pc)
++        (if_then_else
++          (match_operator 0 "rvm_eqne_operator"
++            [(zero_extract:RVM_INT
++               (match_operand:RVM_INT 1 "nonimmediate_operand" "r,m")
++               (const_int 1) (match_operand 2 "const_int_operand" "n,n"))
++             (const_int 0)])
++          (label_ref (match_operand 3 "" "")) (pc)))
++   (clobber (reg:CC CC_REG))]
++  "IN_RANGE (INTVAL (operands[2]), 0, GET_MODE_BITSIZE (<MODE>mode) - 1)
++   && (<MODE>mode == DImode || REG_P (operands[1]))"
++{
++  operands[4] = GEN_INT (GET_MODE_BITSIZE (<MODE>mode) - 1 - INTVAL (operands[2]));
++  output_asm_insn (REG_P (operands[1]) ? "vbtst\t%4,%1" : "btst\t%4,%1", operands);
++  return GET_CODE (operands[0]) == EQ ? "beq\t%3" : "bne\t%3";
++})
++
++(define_insn "rvm_btst_extract_dynamic_branch"
++  [(set (pc)
++        (if_then_else
++          (match_operator 0 "rvm_eqne_operator"
++            [(zero_extract:DI (match_operand:DI 1 "nonimmediate_operand" "r,m")
++                              (const_int 1)
++                              (minus:DI (const_int 63)
++                                (match_operand:DI 2 "register_operand" "r,r")))
++             (const_int 0)])
++          (label_ref (match_operand 3 "" "")) (pc)))
++   (clobber (reg:CC CC_REG))]
++  ""
++{
++  output_asm_insn (REG_P (operands[1]) ? "rbtst\t%2,%1" : "btst\t%2,%1", operands);
++  return GET_CODE (operands[0]) == EQ ? "beq\t%3" : "bne\t%3";
++})
++
++(define_insn "rvm_bsetdi_dynamic_swapped"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (ior:DI (ashift:DI (const_int 1)
++                             (match_operand:DI 2 "register_operand" "r,r"))
++                  (match_operand:DI 1 "nonimmediate_operand" "r,0")))]
++  ""
++  "@
++   rbset\t%2,%1,%0
++   bset\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bchgdi_dynamic_swapped"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (xor:DI (ashift:DI (const_int 1)
++                             (match_operand:DI 2 "register_operand" "r,r"))
++                  (match_operand:DI 1 "nonimmediate_operand" "r,0")))]
++  ""
++  "@
++   rbchg\t%2,%1,%0
++   bchg\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bclrdi_rotate"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (and:DI (match_operand:DI 1 "nonimmediate_operand" "r,0") (rotate:DI (const_int -2) (match_operand:DI 2 "register_operand" "r,r"))))]
++  ""
++  "@
++   rbclr\t%2,%1,%0
++   bclr\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_bclrdi_rotate_swapped"
++  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,m")
++        (and:DI (rotate:DI (const_int -2) (match_operand:DI 2 "register_operand" "r,r")) (match_operand:DI 1 "nonimmediate_operand" "r,0")))]
++  ""
++  "@
++   rbclr\t%2,%1,%0
++   bclr\t%2,%0"
++  [(set_attr "rvm_result_z" "no")])

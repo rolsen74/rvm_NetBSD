@@ -6,12 +6,17 @@ if [ -n "${RVM_NATIVE_OBJDIR:-}" ]; then
     obj=$RVM_NATIVE_OBJDIR
 else
     obj="$script_dir/obj.rvm-native-root"
-    # The current bring-up build lives here; prefer the standard build
-    # directory once build-native-root.sh has generated an image there.
-    if [ ! -f "$obj/native-root/vm.config" ] &&
-       [ -f "$script_dir/obj.rvm-native-clean/native-root/vm.config" ]; then
-        obj="$script_dir/obj.rvm-native-clean"
-    fi
+    # Prefer the standard build, then the latest validated optimization build.
+    # Keep earlier images selectable through RVM_NATIVE_OBJDIR.
+    for candidate in "$obj" \
+        "$script_dir/obj.rvm-native-bit-ops" \
+        "$script_dir/obj.rvm-native-gcc-opt" \
+        "$script_dir/obj.rvm-native-clean"; do
+        if [ -f "$candidate/native-root/vm.config" ]; then
+            obj=$candidate
+            break
+        fi
+    done
 fi
 case "$obj" in /*) ;; *) obj="$script_dir/$obj" ;; esac
 image="$obj/native-root"

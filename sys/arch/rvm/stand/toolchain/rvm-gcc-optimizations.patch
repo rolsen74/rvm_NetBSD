@@ -1,0 +1,414 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -35,6 +35,7 @@
+ #include "emit-rtl.h"
+ #include "diagnostic-core.h"
+ #include "output.h"
++#include "opts.h"
+ #include "stor-layout.h"
+ #include "varasm.h"
+ #include "calls.h"
+@@ -352,7 +353,8 @@
+ 
+ 	/* Default to stack-pointer-based frames unless the user explicitly
+ 	   asks to keep a frame pointer.  */
+-	flag_omit_frame_pointer = 1;
++	if (!OPTION_SET_P (flag_omit_frame_pointer))
++	  flag_omit_frame_pointer = 1;
+ 
+ #ifdef TARGET_RVMBOX
+ 	target_flags |= MASK_HAS_MULX;
+@@ -389,6 +391,68 @@
+   return "";
+ }
+ 
++/* Only reuse Z for adjacent, integer instructions with a single SET.
++   Labels, calls, inline asm and multi-instruction patterns are barriers.
++   Do this at final output, after scheduling and register allocation, so no
++   instruction can be inserted between the producer and the branch.  */
++bool
++rvm_branch_uses_z (rtx_insn *insn, rtx *operands)
++{
++  if ((GET_CODE (operands[0]) != EQ && GET_CODE (operands[0]) != NE)
++      || !REG_P (operands[1]) || operands[2] != const0_rtx)
++    return false;
++  rtx_insn *prev = prev_nonnote_nondebug_insn (insn);
++  if (!prev || !NONJUMP_INSN_P (prev) || GET_CODE (PATTERN (prev)) != SET)
++    return false;
++  rtx set = PATTERN (prev), dst = SET_DEST (set), src = SET_SRC (set);
++  machine_mode mode = GET_MODE (operands[1]);
++  if (!REG_P (dst) || !SCALAR_INT_MODE_P (GET_MODE (dst)))
++    return false;
++  bool same_dst = REGNO (dst) == REGNO (operands[1]);
++  if (GET_CODE (src) == ZERO_EXTEND)
++    return same_dst && (mode == GET_MODE (dst)
++                       || mode == GET_MODE (XEXP (src, 0)));
++  if (GET_MODE (dst) != mode)
++    return false;
++  switch (GET_CODE (src))
++    {
++    case REG:
++      return same_dst || rtx_equal_p (src, operands[1]);
++    case MEM:
++    case CONST_INT:
++    case AND:
++    case IOR:
++    case XOR:
++      return same_dst;
++    default:
++      return false;
++    }
++}
++
++/* Track a zero only within straight-line code, through exact-width or wider
++   register definitions.  Partial writes, calls and asm stop the search.  */
++bool
++rvm_zero_copy_p (rtx_insn *insn, rtx source)
++{
++  for (int limit = 0; limit < 32; ++limit)
++    {
++      insn = prev_nonnote_nondebug_insn (insn);
++      if (!insn || !NONJUMP_INSN_P (insn)
++          || GET_CODE (PATTERN (insn)) != SET
++          || asm_noperands (PATTERN (insn)) >= 0)
++        return false;
++      if (!modified_in_p (source, insn))
++        continue;
++      rtx set = single_set (insn);
++      if (!set || !REG_P (SET_DEST (set))
++          || REGNO (SET_DEST (set)) != REGNO (source)
++          || GET_MODE_SIZE (GET_MODE (SET_DEST (set))) < GET_MODE_SIZE (GET_MODE (source)))
++        return false;
++      return SET_SRC (set) == const0_rtx;
++    }
++  return false;
++}
++
+ static bool
+ rvm_const_s8_p ( rtx x )
+ {
+@@ -603,9 +667,22 @@
+   return (size + 3) & ~HOST_WIDE_INT (3);
+ }
+ 
++/* A leaf with no locals, outgoing area or saved registers needs no PUSHF.
++   Keep the requested frame pointer and all frames that actually use R62.  */
++static bool
++rvm_frameless_p (void)
++{
++  return crtl->is_leaf && !frame_pointer_needed && !cfun->calls_alloca
++    && rvm_frame_alloc_size () == 0
++    && rvm_frame_save_mask () == (1ULL << RVM_FP)
++    && !df_regs_ever_live_p (RVM_FP);
++}
++
+ void
+ rvm_expand_prologue (void)
+ {
++  if (rvm_frameless_p ())
++    return;
+   emit_insn (gen_pushf (GEN_INT (rvm_frame_save_mask ())));
+   HOST_WIDE_INT size = rvm_frame_alloc_size ();
+   if (size != 0)
+@@ -616,7 +693,8 @@
+ void
+ rvm_expand_epilogue (void)
+ {
+-  emit_insn (gen_popf ());
++  if (!rvm_frameless_p ())
++    emit_insn (gen_popf ());
+   emit_jump_insn (gen_return ());
+ }
+ 
+@@ -624,7 +702,8 @@
+ rvm_initial_elimination_offset (int from, int to)
+ {
+   HOST_WIDE_INT size = rvm_frame_alloc_size ();
+-  HOST_WIDE_INT saved = 8 * (1 + popcount_hwi (rvm_frame_save_mask ()));
++  HOST_WIDE_INT saved = rvm_frameless_p () ? 0
++    : 8 * (1 + popcount_hwi (rvm_frame_save_mask ()));
+   /* Locals lie immediately below PUSHF, outgoing arguments below locals.
+      The argument pointer addresses the caller's 64-byte register homes,
+      immediately above JSR's eight-byte return address. */
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -482,8 +482,8 @@
+    locations.  */
+ #define MOVE_MAX 8
+ 
+-/* All load operations zero extend.  */
+-#define LOAD_EXTEND_OP(MEM) ZERO_EXTEND
++/* Narrow MOVE loads preserve the other register bits.  Use the default
++   UNKNOWN load extension; explicit unsigned widening uses EXTU instead.  */
+ 
+ /* A number, the maximum number of registers that can appear in a
+    valid memory address.  */
+--- a/gcc/config/rvm/rvm-protos.h
++++ b/gcc/config/rvm/rvm-protos.h
+@@ -25,3 +25,6 @@
+ extern const char *rvm_output_call (rtx *, int);
+ extern const char *rvm_output_pushf (rtx *);
+ extern const char *rvm_output_addsub_immediate (rtx *, bool, char);
++
++extern bool rvm_branch_uses_z (rtx_insn *, rtx *);
++extern bool rvm_zero_copy_p (rtx_insn *, rtx);
+--- a/gcc/config/rvm/rvm.md
++++ b/gcc/config/rvm/rvm.md
+@@ -39,9 +39,30 @@
+   DONE;
+ })
+ 
++;; Expose quotient and remainder together to expand_divmod.  The register
++;; and immediate alternatives below already recognize these parallel SETs.
++(define_mode_iterator RVM_INT [QI HI SI DI])
++(define_expand "divmod<mode>4"
++  [(parallel
++    [(set (match_operand:RVM_INT 0 "register_operand")
++          (div:RVM_INT (match_operand:RVM_INT 1 "register_operand")
++                       (match_operand:RVM_INT 2 "register_operand")))
++     (set (match_operand:RVM_INT 3 "register_operand")
++          (mod:RVM_INT (match_dup 1) (match_dup 2)))])]
++  "")
++(define_expand "udivmod<mode>4"
++  [(parallel
++    [(set (match_operand:RVM_INT 0 "register_operand")
++          (udiv:RVM_INT (match_operand:RVM_INT 1 "register_operand")
++                        (match_operand:RVM_INT 2 "register_operand")))
++     (set (match_operand:RVM_INT 3 "register_operand")
++          (umod:RVM_INT (match_dup 1) (match_dup 2)))])]
++  "")
++
+ ;; Vcmds first, Rcmds next
+ (include "rvm-inst-v.md")
+ (include "rvm-inst-r.md")
++(include "rvm-opt.md")
+ (include "rvm-inst.md")
+ 
+ ;; Vcmds first, Rcmds next
+--- a/gcc/config/rvm/rvm-brance.md
++++ b/gcc/config/rvm/rvm-brance.md
+@@ -55,7 +55,10 @@
+   ""
+ {
+   if (CONST_INT_P (operands[2]) && INTVAL (operands[2]) == 0)
+-    output_asm_insn (REG_P (operands[1]) ? "rtst.b\t%1" : "tst.b\t%1", operands);
++    {
++      if (!rvm_branch_uses_z (insn, operands))
++        output_asm_insn (REG_P (operands[1]) ? "rtst.b\t%1" : "tst.b\t%1", operands);
++    }
+   else if (REG_P (operands[1]) && CONST_INT_P (operands[2])
+            && IN_RANGE (INTVAL (operands[2]), -128, 127))
+     output_asm_insn ("vcmp.b\t%2,%1", operands);
+@@ -113,7 +116,10 @@
+   ""
+ {
+   if (CONST_INT_P (operands[2]) && INTVAL (operands[2]) == 0)
+-    output_asm_insn (REG_P (operands[1]) ? "rtst.w\t%1" : "tst.w\t%1", operands);
++    {
++      if (!rvm_branch_uses_z (insn, operands))
++        output_asm_insn (REG_P (operands[1]) ? "rtst.w\t%1" : "tst.w\t%1", operands);
++    }
+   else if (REG_P (operands[1]) && CONST_INT_P (operands[2])
+            && IN_RANGE (INTVAL (operands[2]), -128, 127))
+     output_asm_insn ("vcmp.w\t%2,%1", operands);
+@@ -171,7 +177,10 @@
+   ""
+ {
+   if (CONST_INT_P (operands[2]) && INTVAL (operands[2]) == 0)
+-    output_asm_insn (REG_P (operands[1]) ? "rtst.l\t%1" : "tst.l\t%1", operands);
++    {
++      if (!rvm_branch_uses_z (insn, operands))
++        output_asm_insn (REG_P (operands[1]) ? "rtst.l\t%1" : "tst.l\t%1", operands);
++    }
+   else if (REG_P (operands[1]) && CONST_INT_P (operands[2])
+            && IN_RANGE (INTVAL (operands[2]), -128, 127))
+     output_asm_insn ("vcmp.l\t%2,%1", operands);
+@@ -229,7 +238,10 @@
+   ""
+ {
+   if (CONST_INT_P (operands[2]) && INTVAL (operands[2]) == 0)
+-    output_asm_insn (REG_P (operands[1]) ? "rtst.q\t%1" : "tst.q\t%1", operands);
++    {
++      if (!rvm_branch_uses_z (insn, operands))
++        output_asm_insn (REG_P (operands[1]) ? "rtst.q\t%1" : "tst.q\t%1", operands);
++    }
+   else if (REG_P (operands[1]) && CONST_INT_P (operands[2])
+            && IN_RANGE (INTVAL (operands[2]), -128, 127))
+     output_asm_insn ("vcmp.q\t%2,%1", operands);
+--- a/gcc/config/rvm/rvm-inst.md
++++ b/gcc/config/rvm/rvm-inst.md
+@@ -42,7 +42,11 @@
+     return "vmove.b\t%1,%0";
+ 
+   if (REG_P (operands[0]) && REG_P (operands[1]))
+-    return "rmove.b\t%1,%0";
++    {
++      if (rvm_zero_copy_p (insn, operands[1]))
++        return "rclr.b\t%0";
++      return "rmove.b\t%1,%0";
++    }
+ 
+   return "move.b\t%1,%0";
+ })
+@@ -87,7 +91,11 @@
+     return "vmove.w\t%1,%0";
+ 
+   if (REG_P (operands[0]) && REG_P (operands[1]))
+-    return "rmove.w\t%1,%0";
++    {
++      if (rvm_zero_copy_p (insn, operands[1]))
++        return "rclr.w\t%0";
++      return "rmove.w\t%1,%0";
++    }
+ 
+   return "move.w\t%1,%0";
+ })
+@@ -132,7 +140,11 @@
+     return "vmove.l\t%1,%0";
+ 
+   if (REG_P (operands[0]) && REG_P (operands[1]))
+-    return "rmove.l\t%1,%0";
++    {
++      if (rvm_zero_copy_p (insn, operands[1]))
++        return "rclr.l\t%0";
++      return "rmove.l\t%1,%0";
++    }
+ 
+   return "move.l\t%1,%0";
+ })
+@@ -216,7 +228,11 @@
+     return "vmove.q\t%1,%0";
+ 
+   if (REG_P (operands[0]) && REG_P (operands[1]))
+-    return "rmove.q\t%1,%0";
++    {
++      if (rvm_zero_copy_p (insn, operands[1]))
++        return "rclr.q\t%0";
++      return "rmove.q\t%1,%0";
++    }
+ 
+   return "move.q\t%1,%0";
+ })
+--- a/gcc/config/rvm/rvm-inst-r.md
++++ b/gcc/config/rvm/rvm-inst-r.md
+@@ -299,10 +299,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*divmodqi4_r"
+    [(parallel
+-      [(set (match_operand:QI 0 "register_operand" "=&r")
++      [(set (match_operand:QI 0 "register_operand" "=r")
+             (div:QI (match_operand:QI 2 "register_operand" "r")
+                     (match_operand:QI 3 "register_operand" "r")))
+-       (set (match_operand:QI 1 "register_operand" "=&r")
++       (set (match_operand:QI 1 "register_operand" "=r")
+             (mod:QI (match_dup 2)
+                     (match_dup 3)))])]
+    ""
+@@ -317,10 +317,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*divmodhi4_r"
+    [(parallel
+-      [(set (match_operand:HI 0 "register_operand" "=&r")
++      [(set (match_operand:HI 0 "register_operand" "=r")
+             (div:HI (match_operand:HI 2 "register_operand" "r")
+                     (match_operand:HI 3 "register_operand" "r")))
+-       (set (match_operand:HI 1 "register_operand" "=&r")
++       (set (match_operand:HI 1 "register_operand" "=r")
+             (mod:HI (match_dup 2)
+                     (match_dup 3)))])]
+    ""
+@@ -335,10 +335,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*divmodsi4_r"
+    [(parallel
+-      [(set (match_operand:SI 0 "register_operand" "=&r")
++      [(set (match_operand:SI 0 "register_operand" "=r")
+             (div:SI (match_operand:SI 2 "register_operand" "r")
+                     (match_operand:SI 3 "register_operand" "r")))
+-       (set (match_operand:SI 1 "register_operand" "=&r")
++       (set (match_operand:SI 1 "register_operand" "=r")
+             (mod:SI (match_dup 2)
+                     (match_dup 3)))])]
+    ""
+@@ -353,10 +353,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*divmoddi4_r"
+    [(parallel
+-      [(set (match_operand:DI 0 "register_operand" "=&r")
++      [(set (match_operand:DI 0 "register_operand" "=r")
+             (div:DI (match_operand:DI 2 "register_operand" "r")
+                     (match_operand:DI 3 "register_operand" "r")))
+-       (set (match_operand:DI 1 "register_operand" "=&r")
++       (set (match_operand:DI 1 "register_operand" "=r")
+             (mod:DI (match_dup 2)
+                     (match_dup 3)))])]
+    ""
+@@ -371,10 +371,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*udivmodqi4_r"
+    [(parallel
+-      [(set (match_operand:QI 0 "register_operand" "=&r")
++      [(set (match_operand:QI 0 "register_operand" "=r")
+             (udiv:QI (match_operand:QI 2 "register_operand" "r")
+                      (match_operand:QI 3 "register_operand" "r")))
+-       (set (match_operand:QI 1 "register_operand" "=&r")
++       (set (match_operand:QI 1 "register_operand" "=r")
+             (umod:QI (match_dup 2)
+                      (match_dup 3)))])]
+    ""
+@@ -389,10 +389,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*udivmodhi4_r"
+    [(parallel
+-      [(set (match_operand:HI 0 "register_operand" "=&r")
++      [(set (match_operand:HI 0 "register_operand" "=r")
+             (udiv:HI (match_operand:HI 2 "register_operand" "r")
+                      (match_operand:HI 3 "register_operand" "r")))
+-       (set (match_operand:HI 1 "register_operand" "=&r")
++       (set (match_operand:HI 1 "register_operand" "=r")
+             (umod:HI (match_dup 2)
+                      (match_dup 3)))])]
+    ""
+@@ -407,10 +407,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*udivmodsi4_r"
+    [(parallel
+-      [(set (match_operand:SI 0 "register_operand" "=&r")
++      [(set (match_operand:SI 0 "register_operand" "=r")
+             (udiv:SI (match_operand:SI 2 "register_operand" "r")
+                      (match_operand:SI 3 "register_operand" "r")))
+-       (set (match_operand:SI 1 "register_operand" "=&r")
++       (set (match_operand:SI 1 "register_operand" "=r")
+             (umod:SI (match_dup 2)
+                      (match_dup 3)))])]
+    ""
+@@ -425,10 +425,10 @@
+ ;; --------------------------------------------------
+ (define_insn "*udivmoddi4_r"
+    [(parallel
+-      [(set (match_operand:DI 0 "register_operand" "=&r")
++      [(set (match_operand:DI 0 "register_operand" "=r")
+             (udiv:DI (match_operand:DI 2 "register_operand" "r")
+                      (match_operand:DI 3 "register_operand" "r")))
+-       (set (match_operand:DI 1 "register_operand" "=&r")
++       (set (match_operand:DI 1 "register_operand" "=r")
+             (umod:DI (match_dup 2)
+                      (match_dup 3)))])]
+    ""
+--- /dev/null
++++ b/gcc/config/rvm/rvm-opt.md
+@@ -0,0 +1,14 @@
++;; Share a constant between an adjacent store and register assignment.  Use
++;; the existing destination, never a new scratch register, and do not change
++;; an address that depends on its old contents.
++(define_peephole2
++  [(set (match_operand:RVM_INT 0 "memory_operand")
++        (match_operand:RVM_INT 1 "const_int_operand"))
++   (set (match_operand:RVM_INT 2 "register_operand") (match_dup 1))]
++  "INTVAL (operands[1]) != 0
++   && !IN_RANGE (INTVAL (operands[1]), -128, 127)
++   && !reg_overlap_mentioned_p (operands[2], operands[0])"
++  [(set (match_dup 2) (match_dup 1))
++   (set (match_dup 0) (match_dup 2))])
++
++
