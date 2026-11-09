@@ -30,7 +30,9 @@ class UserBuilder:
         includes.mkdir(exist_ok=True)
         if not (includes/'machine').exists():
             (includes/'machine').symlink_to(self.root/'sys/arch/rvm/include', target_is_directory=True)
-        for name in ('fcntl.h', 'stdint.h', 'termios.h'):
+        # Use NetBSD's foundational headers consistently. Mixing GCC's
+        # stddef.h with machine/ansi.h can suppress or redefine size_t.
+        for name in ('fcntl.h', 'stdint.h', 'termios.h', 'stddef.h', 'stdarg.h'):
             if not (includes/name).exists():
                 (includes/name).symlink_to(self.root/'sys/sys'/name)
         self.prefix = str(Path(toolchain).resolve()/'bin/rvm-netbsd-')

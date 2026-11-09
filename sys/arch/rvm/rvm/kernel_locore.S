@@ -108,6 +108,31 @@ rvm_irq_get_inte:
 rvm_cpu_halt:
         halt
         rts
+        xdef rvm_idle_halt
+rvm_idle_halt:
+        /* Enter with IRQs disabled. Preserve MMU/cache/TLB controls. */
+        mfctrl cr,r0
+        ori.q #4,r0
+#ifdef RVM_IDLE_RACE_TEST
+        /* Wait beyond a timer period with IRQs masked, then enable them
+         * immediately before HALT. The EARLY check requires a skipped HALT. */
+        move.q #0x0700000000001120,r1
+        move.q (r1),r2
+.Lidle_pending:
+        move.q (r1),r3
+        rsub.q r2,r3,r3
+        cmp.q #100000000,r3
+        bcs .Lidle_pending
+#endif
+        mtctrl r0,cr
+        xdef rvm_idle_halt_pc
+rvm_idle_halt_pc:
+        halt
+        xdef rvm_idle_after_halt
+rvm_idle_after_halt:
+        and.q #0xfffffffffffffffb,r0
+        mtctrl r0,cr
+        rts
         xdef rvm_emulator_putchar
 rvm_emulator_putchar:
         move.q r2,r3

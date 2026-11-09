@@ -31,6 +31,7 @@ static const long *volatile current = &other;
 long a(void) { current = pointers[0]; return *current; }
 int base(void) { return 7; }
 __asm__(".weak spaced_alias\\n  spaced_alias = base\\n");
+__asm__(".weak later_alias\\n later_alias = later_base\\n");
 int alias(void) __attribute__((weak,alias("base")));
 __attribute__((weak)) int choose(void) { return 5; }
 ''')
@@ -39,6 +40,8 @@ extern long common;
 void common_set(void) { common = 42; }
 static long local = 29;
 long b(void) { return local; }
+int later_base(void) { return 43; }
+int later_alias(void) __attribute__((weak,alias("later_base")));
 #ifdef STRONG
 int choose(void) { return 9; }
 int alias(void) { return 21; }
@@ -49,6 +52,8 @@ int spaced_alias(void) { return 23; }
 extern long a(void), b(void), common_read(void);
 extern void common_set(void);
 extern int choose(void), alias(void), base(void), spaced_alias(void);
+extern int later_alias(void);
+extern int first_same(void), second_same(void);
 extern unsigned long stack_address(void);
 extern void emit(int);
 char test_stack[65536] __attribute__((aligned(65536)));
@@ -56,6 +61,8 @@ int check(void) {
     const char *s;
     common_set();
     int ok = common_read() == 42 && a() == 17 && b() == 29 && !(stack_address() & 65535);
+    ok = ok && later_alias() == 43;
+    ok = ok && first_same() == 11 && second_same() == 13;
 #if STRONG
     ok = ok && spaced_alias() == 23 && choose() == 9 && alias() == 21 && alias != base;
 #else
@@ -102,6 +109,12 @@ stack_address:
     compile('b.c', 'b_strong.o', True)
     compile('main.c', 'main.o')
     compile('main.c', 'main_strong.o', True)
+    for directory, value in (('first', 11), ('second', 13)):
+        (work/directory).mkdir()
+        (work/directory/'same.c').write_text(
+            f'static volatile int local = {value};\n'
+            f'int {directory}_same(void) {{ return local; }}\n')
+        compile(directory+'/same.c', directory+'/same.o')
     # GCC can place a .comm between functions at -O0. Its explicit-storage
     # replacement must not move the following function into non-executable data.
     (work/'common.c').write_text('int before(void) { return 1; }\n'
@@ -130,7 +143,8 @@ stack_address:
     ):
         subprocess.run(['python3', str(stand/'kernel_link.py'), '--cc', env['RVM_REAL_CC'],
                         '--ld', args.cross+'ld', '--nm', args.cross+'nm',
-                        '--ar', args.cross+'ar', '-o', 'netbsd.fhr', 'entry.o'] + objects,
+                        '--ar', args.cross+'ar', '-o', 'netbsd.fhr', 'entry.o',
+                        'first/same.o', 'second/same.o'] + objects,
                        cwd=work, env=env, check=True, stdout=subprocess.DEVNULL)
         try:
             result = subprocess.run([args.vmemu, '-c', 'vm.config'], cwd=work,

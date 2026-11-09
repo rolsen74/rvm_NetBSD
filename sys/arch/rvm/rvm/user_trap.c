@@ -140,16 +140,16 @@ rvm_user_exception(struct rvm_exceptionframe *raw)
 	    tf->tf_vector >= RVM_VECTOR_MMU_EXEC && tf->tf_vector <= RVM_VECTOR_MMU_ENABLE) {
 		va = tf->tf_fault_va;
 		/* An invalid-table fault doesn't identify R/W/X. Populate using an
-		 * allowed access; retrying the instruction then checks its exact rights. */
+		 * allowed access; retrying the instruction then checks its exact rights.
+		 * Retry only protection failures: pager errors must retain their cause. */
 		prot = tf->tf_vector == RVM_VECTOR_MMU_WRITE ? VM_PROT_WRITE :
 		    tf->tf_vector == RVM_VECTOR_MMU_EXEC ? VM_PROT_EXECUTE : VM_PROT_READ;
 		error = va >= VM_MIN_ADDRESS && va < VM_MAXUSER_ADDRESS ?
 		    uvm_fault(&l->l_proc->p_vmspace->vm_map, trunc_page(va), prot) : EFAULT;
 		if (tf->tf_vector == RVM_VECTOR_MMU_ENABLE &&
-		    va >= VM_MIN_ADDRESS && va < VM_MAXUSER_ADDRESS && error != ENOMEM) {
-			if (error != 0)
-				error = uvm_fault(&l->l_proc->p_vmspace->vm_map, trunc_page(va), VM_PROT_WRITE);
-			if (error != 0 && error != ENOMEM)
+		    va >= VM_MIN_ADDRESS && va < VM_MAXUSER_ADDRESS && error == EACCES) {
+			error = uvm_fault(&l->l_proc->p_vmspace->vm_map, trunc_page(va), VM_PROT_WRITE);
+			if (error == EACCES)
 				error = uvm_fault(&l->l_proc->p_vmspace->vm_map, trunc_page(va), VM_PROT_EXECUTE);
 		}
 		if (error != 0) {
@@ -170,6 +170,11 @@ rvm_user_exception(struct rvm_exceptionframe *raw)
 			KSI_INIT_TRAP(&ksi);
 			ksi.ksi_signo = SIGSEGV;
 			ksi.ksi_code = mapped ? SEGV_ACCERR : SEGV_MAPERR;
+			if (error == EINVAL) {
+				/* A mapped file page past EOF (including after truncate). */
+				ksi.ksi_signo = SIGBUS;
+				ksi.ksi_code = BUS_ADRERR;
+			}
 			ksi.ksi_addr = (void *)va;
 			ksi.ksi_trap = tf->tf_vector;
 			trapsignal(l, &ksi);

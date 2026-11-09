@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import shlex
 import subprocess
@@ -26,6 +27,10 @@ def main():
     parser.add_argument('--objdir', type=Path, default=root/'obj.rvm-userland')
     parser.add_argument('--tooldir', type=Path)
     parser.add_argument('--libm', action='store_true', help='also build the normal static libm catalog')
+    parser.add_argument('--library', action='append', default=[],
+                        help='also build a static library source directory such as lib/libutil')
+    parser.add_argument('-V', '--make-variable', action='append', default=[],
+                        metavar='NAME=VALUE', help='set a target configuration variable in mk.conf')
     parser.add_argument('--toolchain', type=Path, default=root/'../rvm_gcc/rvm_cross_netbsd')
     parser.add_argument('-j', '--jobs', type=int, default=4)
     parser.add_argument('--program', action='append', default=[],
@@ -64,6 +69,11 @@ CPPFLAGS+= -nostdinc -isystem ${{DESTDIR}}/usr/include -isystem {gcc_include}
 COPTS+= -mfpu
 CWARNFLAGS+= -Wno-error=attributes
 '''
+    for setting in args.make_variable:
+        name, separator, value = setting.partition('=')
+        if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', name) or '\n' in value or '\r' in value:
+            raise SystemExit('Expected a single NAME=VALUE make assignment: '+setting)
+        content += name+'='+value+'\n'
     if not config.exists() or config.read_text() != content:
         config.write_text(content)
     shared_wrapper = tools/'bin/nbmake-rvm'
@@ -82,7 +92,11 @@ CWARNFLAGS+= -Wno-error=attributes
         if saved_wrapper is not None:
             shared_wrapper.write_bytes(saved_wrapper)
     subset = ('host-mkdep compat binstall .WAIT date mktemp sed m4 yacc '
-              '.WAIT lex .WAIT awk genassym lorder tsort join rpcgen mkdep cksum stat makefs')
+              '.WAIT lex pax .WAIT awk genassym lorder tsort join rpcgen mkdep cksum stat makefs')
+    if 'lib/libterminfo' in args.library:
+        subset += ' nbperf .WAIT tic'
+    if 'usr.bin/login' in args.program:
+        subset += ' pwd_mkdb'
     # obj and build_install must be separate invocations: make cannot change
     # its working directory after the obj target has created that directory.
     run([make, '-C', 'tools', 'SUBDIR='+subset, 'MAKECONF=/dev/null', 'obj'], root)
@@ -102,11 +116,11 @@ CWARNFLAGS+= -Wno-error=attributes
         fields = line.split()
         if fields and fields[0].startswith('./usr/include'):
             (dest/fields[0][2:]).mkdir(parents=True, exist_ok=True)
-    for tree in ('include', 'sys', 'common/include', 'lib/libpthread',
+    for tree in ('include', 'sys', 'common/include', 'lib/libpthread', 'lib/libcurses',
                  'external/bsd/elftoolchain/common'):
         for path in (root/tree).rglob('Makefile'):
             (obj/path.parent.relative_to(root)).mkdir(parents=True, exist_ok=True)
-    for directory in ('include', 'sys', 'lib/libpthread',
+    for directory in ('include', 'sys', 'lib/libpthread', 'lib/libcurses',
                       'external/bsd/elftoolchain/common/sys'):
         run([make, '-C', directory, '-j', args.jobs, 'includes'], root)
     # A changed external compiler or FHR adapter must invalidate normal make's
@@ -124,10 +138,9 @@ CWARNFLAGS+= -Wno-error=attributes
     stamp = obj/'userland-toolchain.stamp'
     value = digest.hexdigest()+'\n'
     if not stamp.exists() or stamp.read_text() != value:
-        for directory in ('lib/libc', 'lib/csu', 'lib/libm'):
-            (obj/directory).mkdir(parents=True, exist_ok=True)
+        for directory in ('lib', 'bin', 'sbin', 'usr.bin', 'usr.sbin', 'libexec'):
             for pattern in ('*.o', '*.a'):
-                for path in (obj/directory).glob(pattern):
+                for path in (obj/directory).rglob(pattern):
                     path.unlink()
         stamp.write_text(value)
     run([make, '-C', 'lib/libc', 'NOSUBDIR=yes', '-j', args.jobs, 'depend'], root)
@@ -149,6 +162,22 @@ CWARNFLAGS+= -Wno-error=attributes
     libraries = [('libc.a', obj/'lib/libc/libc.a')]
     if args.libm:
         libraries.append(('libm.a', obj/'lib/libm/libm.a'))
+    os.environ['RVM_REAL_CC'] = str(cc)
+    for library in args.library:
+        directory = Path(library)
+        if (directory.is_absolute() or '..' in directory.parts or
+                not (root/directory/'Makefile').is_file()):
+            raise SystemExit('Expected a library source directory containing a Makefile: '+library)
+        (obj/directory).mkdir(parents=True, exist_ok=True)
+        name = subprocess.check_output([str(make), '-C', str(directory),
+            '-V', '${LIB}'], cwd=root, text=True).strip()
+        if not name or not name.replace('_', '').isalnum():
+            raise SystemExit('Expected a BSD static library Makefile: '+library)
+        overrides = ['CC='+str(stand/'user_cc.py'), 'OBJCOPY=true']
+        run([make, '-C', directory, '-j', args.jobs, 'includes'] + overrides, root)
+        run([make, '-C', directory, '-j', args.jobs, 'depend'] + overrides, root)
+        run([make, '-C', directory, '-j', args.jobs, 'lib'+name+'.a'] + overrides, root)
+        libraries.append(('lib'+name+'.a', obj/directory/('lib'+name+'.a')))
     for name, origin in libraries + [
             (name+'.o', obj/'lib/csu'/(name+'.o'))
             for name in ('crt0', 'crtbegin', 'crtend')]:
@@ -158,7 +187,6 @@ CWARNFLAGS+= -Wno-error=attributes
         elif path.exists():
             raise SystemExit('SDK library path is a directory: '+str(path))
         path.symlink_to(origin)
-    os.environ['RVM_REAL_CC'] = str(cc)
     for program in args.program:
         directory = Path(program)
         if directory.is_absolute() or '..' in directory.parts or not (root/directory/'Makefile').exists():

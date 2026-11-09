@@ -70,7 +70,7 @@ def link(args):
             symbols = subprocess.check_output([args.nm, '-P', '-g',
                                                '--defined-only', str(path)], text=True)
             defined = {line.split()[0] for line in symbols.splitlines() if line.strip()}
-            weak.append(names)
+            weak.append(names & defined)
             definitions.append(defined)
             strong.update(defined - names)
         selected = set(strong)

@@ -1,0 +1,205 @@
+--- a/src_Emulator/Memory/Mem.c
++++ b/src_Emulator/Memory/Mem.c
+@@ -265,6 +265,48 @@
+ 	return ( error );
+ }
+ 
++/* A single guest store must not commit its first page before a later
++ * page raises an MMU fault.  In particular, four-byte-aligned quadword
++ * atomics can straddle pages and must restart intact after COW faults.
++ * Check every destination mapping before touching target RAM or cache.
++ * Page-table accessed/dirty updates are allowed during this preflight.
++ * Physical device/bus errors remain the responsibility of the device.
++ */
++static S32
++myPreflightWrite ( VMMemIntern * in )
++{
++	U64 original = in->buf_Adr;
++	U64 physical = in->phy_Adr;
++	U64 address = original;
++	S32 remaining = in->buf_Len;
++	S32 offset = address & MMU_MASK_PAGE;
++
++	if ( ! in->flag_write || remaining <= MMU_PAGE_SIZE - offset )
++		return FALSE;
++
++	while ( remaining > 0 )
++	{
++		U64 mapping;
++		S32 length;
++
++		in->buf_Adr = address;
++		if ( myTranslate ( in, address & ~MMU_MASK_PAGE, &mapping ) )
++			return TRUE;
++		in->phy_Adr = ( mapping & ~MMU_MASK_PAGE ) + offset;
++		if ( myFlagCheck ( in, mapping & MMU_MASK_PAGE ) )
++			return TRUE;
++		length = MMU_PAGE_SIZE - offset;
++		if ( length > remaining )
++			length = remaining;
++		remaining -= length;
++		address += length;
++		offset = 0;
++	}
++	in->buf_Adr = original;
++	in->phy_Adr = physical;
++	return FALSE;
++}
++
+ /* Translate/check access before the physical-cache lookup. Cache hits
+  * never substitute an old address-space mapping or permission decision. */
+ static struct CacheLine *
+@@ -398,6 +440,8 @@
+ 	//		printf( "doMem_MMU_Cache\n" );
+ 	//	}
+ 
++	if ( myPreflightWrite ( in ) )
++		return;
+ 	doMem22 ( in, TRUE );
+ }
+ 
+@@ -434,6 +478,9 @@
+ 	//		printf( "doMem_MMU_NoCache\n" );
+ 	//	}
+ 
++	if ( myPreflightWrite ( in ) )
++		return;
++
+ 	state	= in->state;
+ 	off		= in->buf_Adr & ( MMU_MASK_PAGE );
+ 	virtadr = in->buf_Adr & ( ~MMU_MASK_PAGE );
+--- a/tests/fpu/test.c
++++ b/tests/fpu/test.c
+@@ -249,18 +249,18 @@
+ 	cpu->cpu_IntegerRegsPtr[IReg_SP] = 0x4000;
+ 	cpu->cpu_FloatRegsPtr[0] = 0x7ff0000000000001ULL;
+ 	cpu->cpu_FloatRegsPtr[63] = 0x8000000000000000ULL;
+-	RUN ( Opcode_FPush, 0x80, 0, 0, 0, 0, 0, 0, 1 );
++	RUN ( Opcode_FPushm, 0x80, 0, 0, 0, 0, 0, 0, 1 );
+ 	assert ( cpu->cpu_IntegerRegsPtr[IReg_SP] == 0x3ff0 );
+ 	assert ( get64 ( 0x3ff0 ) == 0x7ff0000000000001ULL );
+ 	assert ( get64 ( 0x3ff8 ) == 0x8000000000000000ULL );
+ 	cpu->cpu_FloatRegsPtr[0] = 0;
+ 	cpu->cpu_FloatRegsPtr[63] = 0;
+-	RUN ( Opcode_FPop, 0x80, 0, 0, 0, 0, 0, 0, 1 );
++	RUN ( Opcode_FPopm, 0x80, 0, 0, 0, 0, 0, 0, 1 );
+ 	assert ( cpu->cpu_IntegerRegsPtr[IReg_SP] == 0x4000 );
+ 	assert ( cpu->cpu_FloatRegsPtr[0] == 0x7ff0000000000001ULL );
+ 	assert ( cpu->cpu_FloatRegsPtr[63] == 0x8000000000000000ULL );
+-	RUN ( Opcode_FPush, 0, 0, 0, 0, 0, 0, 0, 0 );
+-	RUN ( Opcode_FPop, 0, 0, 0, 0, 0, 0, 0, 0 );
++	RUN ( Opcode_FPushm, 0, 0, 0, 0, 0, 0, 0, 0 );
++	RUN ( Opcode_FPopm, 0, 0, 0, 0, 0, 0, 0, 0 );
+ 	assert ( cpu->cpu_IntegerRegsPtr[IReg_SP] == 0x4000 );
+ 
+ 	// The address variants use one integer register and transfer the whole FP bank.
+@@ -304,7 +304,7 @@
+ 	assert ( cpu->cpu_ControlRegsPtr[CReg_FPSR] == 0 );
+ 	assert ( cpu->cpu_IntegerRegsPtr[10] == ram->mem_MemEnd );
+ 	cpu->cpu_IntegerRegsPtr[IReg_SP] = ram->mem_MemEnd;
+-	REJECT ( Opcode_FPop, 0, 0, 0, 0, 0, 0, 0, 1 );
++	REJECT ( Opcode_FPopm, 0, 0, 0, 0, 0, 0, 0, 1 );
+ 	assert ( cpu->cpu_IntegerRegsPtr[IReg_SP] == ram->mem_MemEnd );
+ 	assert ( cpu->cpu_FloatRegsPtr[0] == old );
+ 	puts ( "PASS: effective addresses, endian memory, raw masked saves and fault rollback" );
+@@ -386,14 +386,69 @@
+ 	puts ( "PASS: concurrent CPUs retain independent FP rounding and exception state" );
+ }
+ 
++/* Real page tables exercise both MMU memory paths, with and without TLB
++ * hits.  Denied or absent second pages must leave RAM AND cached data intact.
++ * Test scalar quadwords and a full saved-register-sized memory operation.
++ */
++static void
++cross_page_stores ( VMContext * context )
++{
++	ram->mem_MemBuf = realloc ( ram->mem_MemBuf, 0x100000 );
++	assert ( ram->mem_MemBuf );
++	memset ( ram->mem_MemBuf + 65536, 0, 0xf0000 );
++	ram->mem_MemSize = ram->mem_MemEnd = 0x100000;
++	for ( unsigned mode = 0; mode < 6; mode++ )
++	{
++		VMCPU * testcpu = CPU_Create ( context );
++		VMCPUState state;
++		U64 policy = mode / 2 == 1 ? MMU_CACHE_WRITEBACK : MMU_CACHE_WRITETHROUGH;
++		U64 flags = MMU_PAGE_VALID | MMU_PAGE_READWRITE | policy;
++		U8 input[520], output[520];
++		assert ( testcpu );
++		memset ( &state, 0, sizeof ( state ) );
++		state.cpu = testcpu;
++		state.ctx = context;
++		testcpu->cpu_ControlRegsPtr[CReg_CR] = CRF_MMU |
++			( mode / 2 ? CRF_DataCache : 0 ) | ( mode & 1 ? CRF_TLB : 0 );
++		testcpu->cpu_ControlRegsPtr[CReg_SR] = 0;
++		testcpu->cpu_ControlRegsPtr[CReg_MUT] = 0x8000;
++		memset ( ram->mem_MemBuf + 0x8000, 0, 6 * 0x800 );
++		for ( unsigned level = 0; level < 5; level++ )
++			put64 ( 0x8000 + level * 0x800, ( 0x8800 + level * 0x800 ) | flags );
++		put64 ( 0xa800, 0x20000 | flags );
++		for ( unsigned size = 8; size <= sizeof ( input ); size += 512 )
++		{
++			memset ( input, size == 8 ? 0x5a : 0xa5, size );
++			for ( unsigned absent = 0; absent < 2; absent++ )
++			{
++				put64 ( 0xa808, absent ? 0 : 0x30000 | ( flags & ~MMU_PAGE_WRITEABLE ) );
++				Mem_InvalidateTLB ( testcpu, TRUE, 0 );
++				assert ( State_Data_WriteMem ( &state, 65532, size, input ) != RC_Okay );
++				assert ( State_Data_ReadMem ( &state, 65532, 4, output ) == RC_Okay );
++				for ( unsigned byte = 0; byte < 4; byte++ )
++					assert ( output[byte] == ( size == 8 ? 0 : 0x5a ) );
++			}
++			put64 ( 0xa808, 0x30000 | flags );
++			Mem_InvalidateTLB ( testcpu, TRUE, 0 );
++			assert ( State_Data_WriteMem ( &state, 65532, size, input ) == RC_Okay );
++			assert ( State_Data_ReadMem ( &state, 65532, size, output ) == RC_Okay );
++			assert ( memcmp ( output, input, size ) == 0 );
++		}
++		/* Discard test-local dirty lines before resetting the physical fixture. */
++		CPU_Delete ( testcpu );
++		memset ( ram->mem_MemBuf + 0x20000, 0, 0x20000 );
++	}
++	puts ( "PASS: cross-page stores preserve memory on MMU faults, cached/uncached and TLB on/off" );
++}
++
+ int
+ main ( void )
+ {
+ 	VMContext * context;
+ 
+-	assert ( Opcode_FPop == 0x01c0 );
++	assert ( Opcode_FPopm == 0x01c0 );
+ 	assert ( Opcode_FPopa == 0x01c1 );
+-	assert ( Opcode_FPush == 0x01c2 );
++	assert ( Opcode_FPushm == 0x01c2 );
+ 	assert ( Opcode_FPusha == 0x01c3 );
+ 	assert ( Opcode_FMove == 0x01d0 );
+ 	assert ( FPU_Init () );
+@@ -428,6 +483,7 @@
+ 	memory ();
+ 	controls_and_rejection ();
+ 	cpu_isolation ();
++	cross_page_stores ( context );
+ 	Mem_Delete ( ram );
+ 	Context_Delete ( context );
+ 	FPU_Cleanup ();
+--- a/makefile
++++ b/makefile
+@@ -430,14 +430,14 @@
+ test-fpu: $(BINDIR)/$(TARGET)_test_fpu
+ 	@$<
+ 
+-$(OBJDIR2)/$(TARGET)/tests/fpu/VMEmu.o: src_Misc/VMEmu.c
++$(OBJDIR2)/$(TARGET)/tests/fpu/VMRun.o: src_Misc/VMRun.c
+ 	@$(MKDIR) $(dir $@)
+ 	@$(CC) $(CFLAGS) -Dmain=VMEmu_Main -c $< -o $@
+ 
+-$(BINDIR)/$(TARGET)_test_fpu: $(filter-out $(OBJDIR2)/$(TARGET)/src_Misc/VMEmu.o,$(OBJS)) $(OBJDIR2)/$(TARGET)/tests/fpu/test.o $(OBJDIR2)/$(TARGET)/tests/fpu/VMEmu.o | $(BINDIR)
++$(BINDIR)/$(TARGET)_test_fpu: $(filter-out $(OBJDIR2)/$(TARGET)/src_Misc/VMRun.o,$(OBJS)) $(OBJDIR2)/$(TARGET)/tests/fpu/test.o $(OBJDIR2)/$(TARGET)/tests/fpu/VMRun.o | $(BINDIR)
+ 	@$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+ 
+ -include $(OBJDIR2)/$(TARGET)/tests/fpu/test.d
+--include $(OBJDIR2)/$(TARGET)/tests/fpu/VMEmu.d
++-include $(OBJDIR2)/$(TARGET)/tests/fpu/VMRun.d
+ 
+-$(OBJDIR2)/$(TARGET)/tests/fpu/test.o $(OBJDIR2)/$(TARGET)/tests/fpu/VMEmu.o: makefile
++$(OBJDIR2)/$(TARGET)/tests/fpu/test.o $(OBJDIR2)/$(TARGET)/tests/fpu/VMRun.o: makefile

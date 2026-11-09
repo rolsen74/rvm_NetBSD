@@ -184,3 +184,13 @@ NetBSD/unix predefined macros and a signed `wint_t`, while retaining the RVM
 unsigned `wchar_t` ABI. The maintained sibling compiler sources and installed
 `cc1` include this update. The previous compiler and configuration are backed
 up under `/tmp/rvm-stdint-update/backup/`.
+
+# VMEmu MMU store preflight
+
+`rvm-mmu-store-preflight.patch` applies to the sibling VMEmu repository,
+using `patch -p1`. Cross-page writes check every destination mapping before
+modifying RAM or data-cache lines. NetBSD's four-byte-aligned 64-bit atomics
+need this behavior for protection faults and restartable COW stores.
+Physical device/bus errors are outside this guarantee. The patch also updates
+the FPU test target for `VMRun.c` and the `fpushm`/`fpopm` opcode names, and
+adds cached/uncached MMU regression checks. Run `make -j4 test-fpu` there.

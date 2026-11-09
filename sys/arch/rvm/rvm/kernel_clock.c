@@ -13,6 +13,7 @@
 #include <machine/asyncirq.h>
 #include <machine/psl.h>
 #include <machine/cache.h>
+#include <machine/idle.h>
 
 static volatile struct rvm_general_driver * const gd = (void *)RVM_GENERIC_ADDR;
 static uint64_t last_tick;
@@ -100,6 +101,7 @@ rvm_kernel_irq(uint64_t *saved)
 	if (!clock_started || (frame[0] >> 48) != 0 ||
 	    vector != (channel ? RVM_TIMER2_VECTOR : RVM_TIMER_VECTOR))
 		rvm_boot_trap(saved + 1);
+	rvm_idle_irq_return(frame);
 	ci->ci_cpl = IPL_SCHED;
 	ci->ci_intr_depth++;
 	gd->timer[channel].control = 0;

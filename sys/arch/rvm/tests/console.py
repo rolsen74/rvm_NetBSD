@@ -109,6 +109,10 @@ def main():
                         data = os.read(process.stdout.fileno(), 65536)
                         if not data: break
                         output.extend(data)
+                        # Preserve progress when diagnosing a guest that has
+                        # stopped responding before the overall timeout.
+                        (obj/'console-keyboard.log').write_text(
+                            output.decode(errors='replace').replace('\r', ''))
                     transcript = output.decode(errors='replace').replace('\r', '')
                     if pixel_stage < 6:
                         if pixel_stage == 0 and 'rvm# ' in transcript:

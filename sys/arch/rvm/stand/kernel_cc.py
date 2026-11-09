@@ -5,6 +5,7 @@ FHR relocatable symbols do not preserve local/weak binding. Give file-local
 definitions unique names and record weak definitions for kernel_link.py, which
 selects them after seeing all objects. This supports static FHR binaries.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,13 @@ import sys
 
 sys.dont_write_bytecode = True
 from fhr_asm import normalize, raw_multiply_register
+
+
+def private_prefix(target):
+    # Different libraries/programs routinely contain equally named objects.
+    # FHR promotes their local labels, so the full object identity is needed.
+    identity = hashlib.sha256(str(target.resolve()).encode()).hexdigest()[:16]
+    return '__rvm_local_' + re.sub(r'\W', '_', target.stem) + '_' + identity + '__'
 
 
 def adapt(source, prefix):
@@ -75,7 +83,7 @@ def main():
     flags[flags.index('-c')] = '-S'
     flags[flags.index('-o') + 1] = str(raw)
     subprocess.run([cc] + flags, check=True)
-    prefix = '__rvm_local_' + re.sub(r'\W', '_', target.stem) + '__'
+    prefix = private_prefix(target)
     source, weak = adapt(raw.read_text(), prefix)
     if os.environ.get('RVM_USER_INITIALIZERS') == '1':
         from static_init import extract

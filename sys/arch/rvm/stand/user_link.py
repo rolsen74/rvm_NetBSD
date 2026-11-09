@@ -35,7 +35,10 @@ class Object:
 
     @property
     def weak(self):
-        return set(self.metadata('.weak.json', []))
+        # A source can declare aliases to functions implemented in another
+        # translation unit. GAS omits such aliases from this object; they
+        # must not suppress a later object's real weak definition.
+        return set(self.metadata('.weak.json', [])) & self.definitions
 
     @property
     def weakrefs(self):

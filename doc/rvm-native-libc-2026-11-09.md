@@ -19,6 +19,20 @@ selected programs with their ordinary `bsd.prog.mk` makefiles. An
 external-toolchain fingerprint invalidates objects after compiler/adapter
 changes. Repeating a build preserves up-to-date objects.
 
+Additional static libraries use `--library`, in dependency order. The native
+shell and init/getty build is:
+
+```sh
+./build-userland.sh --libm --library lib/libutil --library lib/libterminfo \
+    --library lib/libedit --library lib/libcrypt --program bin/sh \
+    --program sbin/init --program libexec/getty
+```
+
+The helper installs curses headers needed by terminfo and builds its host
+nbperf/tic generators. Libedit retains sign-conversion warnings for RVM's
+unsigned wchar_t/signed wint_t combination without treating them as errors.
+The extra catalogs contain 43 libutil, 9 terminfo and 25 libedit members.
+
 The build-tree SDK under `destdir.rvm/usr/lib` links back to the build artifacts.
 FHR objects currently need their adjacent assembly and weak/initializer
 metadata during final linking; copying `libc.a` alone is insufficient. This
@@ -68,6 +82,19 @@ constructor calls only for selected objects. Individual destructor registrations
 remaining destructors across a recursive `exit()`. It verifies that the linker
 actually produced an FHR image and that `_start` is the first code byte.
 `user_prog.py` provides this link step to ordinary program makefiles.
+Both link adapters intersect weak metadata with actual object definitions:
+an alias declaration to a function in another translation unit may have no
+exported symbol and must not hide a later real definition. The full shell
+exposed this with the separate strcasecmp/strncasecmp objects.
+Private symbol names also include a hash of the output object's full path.
+Using its filename alone collided between usr.bin/login/login.o and
+libutil's login.o. The binding test now links same-named objects from two
+directories, each retaining its own file-local data.
+
+`syscall(int, ...)` has a separate entry that clears the unspecified upper
+32 bits of the number register before entering `__syscall(quad_t, ...)`.
+The original shared alias only worked when the caller happened to leave
+those bits clear; extra string calls in the native test exposed SIGSYS.
 
 There are no ELF shared-library, unwind-frame, profiling or dynamic-linker
 artifacts in this build. Dynamic symbol visibility attributes are ignored by
@@ -91,6 +118,17 @@ returning from `mi_userret()`. Signal context capture already performs the
 same adjustment. These primitives must be revisited for an SMP or cached
 memory implementation.
 
+The four-byte ABI alignment permits a 64-bit atomic to cross a 64 KiB page
+boundary. VMEmu must check all destination pages before writing any fragment;
+otherwise a fault on the second page can expose a torn value or prevent a
+RAS retry from matching the original value. The emulator now preflights
+cross-page MMU writes in both its cached and uncached paths. The incremental
+patch is `sys/arch/rvm/stand/toolchain/rvm-mmu-store-preflight.patch` and is
+applied to the sibling VMEmu source and installed emulator. This guarantees
+rollback for MMU mapping/permission faults, not physical device/bus errors.
+Its `make test-fpu` regression covers denied/absent second pages, successful
+retries, 8/520-byte stores, cache writeback/writethrough and TLB on/off.
+
 ## Validation and remaining integration
 
 The guest suite passes at both 64 and 640 MiB, checking startup, stdio, errno, allocation/break tracking,
@@ -98,6 +136,8 @@ indirect syscalls, floating and wide I/O, FP control, signals, nonlocal jumps,
 getcontext/setcontext, TLS, and CAS operations. A parent and child concurrently
 increment the same shared-memory counter 100,000 times each. Both 32-bit and
 64-bit C11 compare-exchange are checked.
+Cross-page 64-bit CAS checks cover a protected second page without modifying
+the first page, and private two-page COW faults followed by a successful retry.
 
 Further programs verify preinit, constructor/destructor priorities, registration
 of new exit handlers, recursive exit, TLS initialization/alignment, signal use,
@@ -106,6 +146,10 @@ arguments (including stack arguments), linked returns, signal masks and FPU
 rounding state. The normal libm passes the binary64 math/fenv test, including
 directed decimal parsing/formatting. Its boundary checks disable GCC builtin
 folding so that the actual library calls and exception flags are observed.
+Additional native libm checks cover binary32 FMA cancellation, elementary
+functions and complex argument/result passing, conjugation and square root.
+An independent object tree with private host tools builds libc/csu/libm and
+the four utilities from scratch; `pax` is built before its makefs consumer.
 
 The normal makefiles build `echo`, `cat`, `pwd` and `sync`; those executables
 also pass real guest command checks. The test automatically includes these
@@ -114,6 +158,46 @@ programs and libm when their native artifacts are present:
 ```sh
 python3 sys/arch/rvm/tests/native_libc.py --objdir obj.rvm-userland
 ```
+
+Building all six of `bin/ls`, `bin/test`, `bin/mkdir`, `bin/cp`, `bin/mv` and
+`bin/rm` also enables a writable FFS utility test. It checks file data and
+permissions, recursive copying with symlinks, rename, directory listing and
+removal. A native `bin/sh/sh` artifact replaces the fixture shell and enables
+script and interactive/job-control checks, using the full libedit/terminfo
+shell rather than its bootstrap SMALL configuration.
+
+`tests/native_init.py` boots the ordinary static `sbin/init` as PID 1, runs
+`/etc/rc` through the full native shell, remounts the disposable FFS root
+writable, enters multiuser mode and starts native `libexec/getty` at a login
+prompt. This passes at 64 MiB. It uses a previously exported fixture:
+
+```sh
+python3 sys/arch/rvm/tests/native_init.py --objdir obj.rvm-userland \
+    --fixture-tree obj.rvm-userland/fixture-tree
+```
+
+The same boot-to-prompt check passes at 640 MiB. Building traditional static
+login uses explicit target configuration overrides:
+
+```sh
+./build-userland.sh --library lib/libutil --library lib/libcrypt \
+    -V USE_PAM=no -V USE_KERBEROS=no -V USE_SKEY=no --program usr.bin/login
+python3 sys/arch/rvm/tests/native_init.py --objdir obj.rvm-userland \
+    --fixture-tree obj.rvm-userland/fixture-tree --login
+```
+
+This adds the host pwd_mkdb tool. The authentication fixture builds its own
+big-endian password databases and uses a disposable known password/hash,
+then checks root identity, HOME/USER and the controlling terminal after login.
+It first supplies an incorrect password and requires rejection. Authentication
+passes at both 64 and 640 MiB. Normal mount/mount_ffs, id and stty also run in
+the rc path when those artifacts have been built.
+It does not install a production account database or rc configuration. The
+ordinary default root image remains the integration init.
+
+`build-native-root.sh` now builds a separate [minimal native login
+image](rvm-native-root-2026-11-09.md) with DISKROOT_GENERIC, ordinary native
+programs, rc/fstab and a locked root account by default.
 
 Use `--ram-mib 640` for the larger-memory run. For local iterations,
 `--export-tree obj.rvm-userland/fixture-tree` saves a generated fixture tree;
@@ -129,8 +213,8 @@ kernel build prints fault addresses/PCs; this flag is included in the kernel
 build fingerprint and is disabled in the normal image.
 
 The default disk-root image still uses the bootstrap runtime. Remaining work
-includes libpthread/native TLS, more normal libraries and programs, production
-init/root configuration, a standalone installable SDK and executable-format/
+includes libpthread/native TLS, more normal libraries and programs, full rc.d/
+service configuration, a standalone installable SDK and executable-format/
 dynamic-linker support. Binary32 compiler runtime arithmetic/conversions still
 have the earlier software-float rounding/exception limitations; this build
 does not make those operations hardware FPU instructions.

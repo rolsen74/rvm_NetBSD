@@ -1,10 +1,29 @@
 # NetBSD/RVM bring-up
 
+The [idle HALT update](../../../doc/rvm-idle-halt-2026-11-09.md) lets VMEmu
+sleep its CPU thread when NetBSD is idle, while preserving timer and keyboard
+wakeups. A headless comparison with the updated add/sub toolchain reduced
+idle host CPU use from about one core to about six percent of one core.
+
+The [storage and terminal update](../../../doc/rvm-storage-terminals-2026-11-09.md)
+adds native passwd/pwd_mkdb, fsck, tmpfs and ptyfs, with real password-change,
+raw disk, file-mapping and pseudo-terminal tests. The native image checks its
+root at boot and mounts `/tmp` and `/dev/pts` through fstab.
+
+The [native login image](../../../doc/rvm-native-root-2026-11-09.md) builds
+with `./build-native-root.sh`. It uses the production disk-root kernel and
+normal static init/sh/getty/login, with a minimal rc/fstab configuration and
+a locked root account by default. Native authentication checks pass at 64 and
+640 MiB; a separate test verifies the production image reaches a login prompt.
+
 The [native libc/csu build](../../../doc/rvm-native-libc-2026-11-09.md) builds
 the normal static libc catalog and startup objects with BSD make, plus selected
 native utilities. Guest checks cover user atomics, context switching,
 constructors, TLS, math/fenv and utility execution. The default disk-root image
 continues to use the bootstrap runtime while the remaining userland is ported.
+The full native shell links libedit/terminfo and passes interactive job-control
+checks. A separate disposable image boots native PID 1 init through `/etc/rc`
+and multiuser startup to the native getty login prompt.
 
 The [emulated TLS update](../../../doc/rvm-tls-2026-11-09.md) adds C `__thread`
 and C11 `_Thread_local` support for the single-LWP static runtime, including

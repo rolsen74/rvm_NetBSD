@@ -4,10 +4,36 @@
 #include <sys/atomic.h>
 #include <sys/cpu.h>
 #include <sys/lwp.h>
+#include <sys/proc.h>
+#include <sys/sched.h>
 #include <machine/asyncirq.h>
 #include <machine/boot.h>
 #include <machine/irq.h>
 #include <machine/psl.h>
+#include <machine/idle.h>
+
+extern char rvm_idle_halt_pc[], rvm_idle_after_halt[];
+static uint64_t idle_wakeups, idle_skips;
+uint64_t rvm_idle_halt_wakeups(void) { return idle_wakeups; }
+uint64_t rvm_idle_halt_skips(void) { return idle_skips; }
+
+void
+rvm_idle_irq_return(uint64_t *frame)
+{
+	if (frame[1] == (uintptr_t)rvm_idle_halt_pc || (frame[0] & PSL_H)) {
+		KASSERT(!USERMODE(frame[0]) && curlwp != NULL && (curlwp->l_flag & LW_IDLE));
+		KASSERT(frame[1] == (uintptr_t)rvm_idle_halt_pc ||
+		    frame[1] == (uintptr_t)rvm_idle_after_halt);
+		if (frame[0] & PSL_H)
+			idle_wakeups++;
+		else
+			idle_skips++;
+		/* An IRQ between enabling interrupts and HALT must skip the HALT.
+		 * A wake from HALT must not restore the saved halted status at RTE. */
+		frame[1] = (uintptr_t)rvm_idle_after_halt;
+		frame[0] &= ~PSL_H;
+	}
+}
 
 int
 splraise(int ipl)
@@ -85,10 +111,20 @@ cpu_need_proftick(struct lwp *l)
 void
 cpu_idle(void)
 {
-	/* Keep IRQs live while idle. A HALT transition needs an atomic
-	 * pending-work check/return protocol before it can replace this loop.
-	 */
+	rvm_intr_disable();
+	KASSERT(CURCPU_IDLE_P() && (curlwp->l_flag & LW_IDLE));
+	KASSERT(curcpu()->ci_cpl == IPL_NONE && curcpu()->ci_intr_depth == 0 &&
+	    curcpu()->ci_mtx_count == 0 && curlwp->l_md.md_irq_hold == 0);
+#ifdef RVM_IDLE_SPIN_TEST
+	/* Control kernel for comparing host CPU use with the same toolchain. */
 	rvm_intr_apply();
 	while (curcpu()->ci_want_resched == 0)
 		__asm volatile("" ::: "memory");
+#else
+	/* UP: no work can be queued between this check and enabling IRQs.
+	 * The recognized assembly window handles an IRQ before HALT executes. */
+	if (curcpu()->ci_want_resched == 0 && !sched_curcpu_runnable_p())
+		rvm_idle_halt();
+	rvm_intr_apply();
+#endif
 }

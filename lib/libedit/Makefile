@@ -13,6 +13,11 @@ LIBDPLIBS+=     terminfo ${.CURDIR}/../libterminfo
 COPTS+=	-Wunused-parameter
 CWARNFLAGS.gcc+=	-Wconversion
 CWARNFLAGS.clang+=	-Wno-cast-qual
+.if ${MACHINE_CPU} == "rvm"
+# RVM retains unsigned wchar_t but uses NetBSD's signed wint_t.  Unicode
+# characters fit both representations; keep the conversion diagnostics visible.
+CWARNFLAGS.gcc+=	-Wno-error=sign-conversion
+.endif
 
 SRCS =	chared.c chartype.c common.c el.c eln.c emacs.c filecomplete.c \
 	hist.c history.c historyn.c keymacro.c literal.c map.c \

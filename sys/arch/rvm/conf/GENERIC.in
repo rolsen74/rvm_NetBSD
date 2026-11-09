@@ -27,7 +27,8 @@ options         HZ=50                   # GeneralDriver GUI timer frequency
 
 # Filesystems. DISKROOT selects an FFS root on the optional HARDFILE disk.
 file-system     FFS                     # Berkeley Fast File System
-#file-system    TMPFS                   # Memory-backed filesystem
+file-system     TMPFS                   # Memory-backed filesystem
+file-system     PTYFS                   # Dynamic pseudo-terminal nodes
 #file-system    KERNFS                  # Kernel information filesystem
 #file-system    NFS                     # Network filesystem client
 
@@ -41,7 +42,7 @@ ld0             at mainbus0             # Optional VMEmu HARDFILE at its default
 
 # Basic pseudo-devices (enable when the associated kernel support is ready).
 #pseudo-device  loop                    # Enable together with a network protocol
-#pseudo-device  pty                     # Pseudo-terminals
+pseudo-device   pty                     # Pseudo-terminals
 #pseudo-device  clockctl                # User clock control
 
 # Interactive root selection; DISKROOT overrides this with ld0a/ffs.

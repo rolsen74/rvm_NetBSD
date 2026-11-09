@@ -282,6 +282,12 @@ $(OBJDIR)/bootloader.bin: $(BOOT_SOURCES) $(HEADERS) $(RVM_DIR)/Makefile.bootstr
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$(RVM_DIR)/stand/boot/Source.vma" -o "$(OBJDIR)/bootloader.vma"
 	$(VMASM) -I "$(RVM_DIR)/stand/boot/includes_i" -I "$(RVM_DIR)/stand/boot" -i "$(OBJDIR)/bootloader.vma" -o "$@" --bin --optimize
 
+# build-kernel.sh exports the compiler/assembler fingerprint. The loader is
+# executable code too and must be rebuilt after an instruction-format change.
+ifneq ($(RVM_TOOLCHAIN_STAMP),)
+$(OBJDIR)/bootloader.bin: $(RVM_TOOLCHAIN_STAMP)
+endif
+
 $(OBJDIR)/vm.config: $(RVM_DIR)/conf/vmemu.conf | $(OBJDIR)
 	cp "$<" "$@"
 

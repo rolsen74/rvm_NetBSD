@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -22,7 +23,9 @@
     return 1; } } while (0)
 static _Thread_local int tls = 41;
 static volatile sig_atomic_t caught, resumed;
+long rvm_syscall_dirty_number(void), rvm_syscall_wide_number(void);
 static void handler(int sig) { caught = sig; tls++; }
+static void expected_fault(int sig) { _exit(sig); }
 static void
 fault(int sig, siginfo_t *info, void *raw)
 {
@@ -48,13 +51,27 @@ main(void)
     diagnostic.sa_flags = SA_SIGINFO;
     sigemptyset(&diagnostic.sa_mask);
     CHECK(sigaction(SIGSEGV, &diagnostic, NULL) == 0);
+    CHECK(sigaction(SIGSYS, &diagnostic, NULL) == 0);
+    CHECK(sigaction(SIGILL, &diagnostic, NULL) == 0);
+    CHECK(sigaction(SIGBUS, &diagnostic, NULL) == 0);
     puts("native libc: entered main");
     CHECK(getprogname() != NULL && *getprogname() != '\0');
     CHECK(getenv("PATH") != NULL);
+    CHECK(strcasecmp(getprogname(), "native-libc-check") == 0);
+    CHECK(strncasecmp(getenv("PATH"), "/BIN", 4) == 0);
     errno = 0;
     CHECK(close(-1) == -1 && errno == EBADF);
     CHECK(syscall(SYS_getpid) == getpid());
     CHECK(__syscall(SYS_getpid) == getpid());
+    CHECK(rvm_syscall_dirty_number() == getpid());
+    struct sigaction ignored;
+    memset(&ignored, 0, sizeof(ignored));
+    ignored.sa_handler = SIG_IGN;
+    sigemptyset(&ignored.sa_mask);
+    CHECK(sigaction(SIGSYS, &ignored, NULL) == 0);
+    errno = 0;
+    CHECK(rvm_syscall_wide_number() == -1 && errno == ENOSYS);
+    CHECK(sigaction(SIGSYS, &diagnostic, NULL) == 0);
     puts("native libc: indirect syscalls verified");
     struct nlist symbols[2];
     memset(symbols, 0, sizeof(symbols));
@@ -134,6 +151,43 @@ main(void)
         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) && expected64 == 29 && quad == 29);
     puts("native libc: scalar atomics verified");
     int fds[2], status;
+    /* uint64_t has four-byte ABI alignment and may straddle two pages.
+     * A failed second-page store must leave the first fragment untouched;
+     * COW faults must allow the RAS to retry the whole compare/exchange. */
+    size_t pagesize = (size_t)sysconf(_SC_PAGESIZE);
+    unsigned char *boundary = mmap(NULL, 2 * pagesize, PROT_READ | PROT_WRITE,
+        MAP_SHARED | MAP_ANON, -1, 0);
+    CHECK(boundary != MAP_FAILED);
+    volatile uint64_t *cross = (volatile uint64_t *)(boundary + pagesize - 4);
+    const uint64_t original = UINT64_C(0x123456789abcdef0);
+    const uint64_t replacement = UINT64_C(0xfedcba9876543210);
+    *cross = original;
+    pid_t probe = fork();
+    CHECK(probe >= 0);
+    if (probe == 0) {
+        if (signal(SIGSEGV, expected_fault) == SIG_ERR ||
+            mprotect(boundary + pagesize, pagesize, PROT_READ) != 0)
+            _exit(1);
+        (void)atomic_cas_64(cross, original, replacement);
+        _exit(2);
+    }
+    CHECK(waitpid(probe, &status, 0) == probe);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == SIGSEGV);
+    CHECK(*cross == original);
+    CHECK(munmap(boundary, 2 * pagesize) == 0);
+    boundary = mmap(NULL, 2 * pagesize, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANON, -1, 0);
+    CHECK(boundary != MAP_FAILED);
+    cross = (volatile uint64_t *)(boundary + pagesize - 4);
+    *cross = original;
+    probe = fork();
+    CHECK(probe >= 0);
+    if (probe == 0)
+        _exit(atomic_cas_64(cross, original, replacement) == original &&
+            *cross == replacement ? 0 : 3);
+    CHECK(waitpid(probe, &status, 0) == probe && status == 0);
+    CHECK(*cross == original && munmap(boundary, 2 * pagesize) == 0);
+    puts("native libc: cross-page atomic protection and COW verified");
     CHECK(pipe(fds) == 0);
     CHECK(write(fds[1], "pipe", 4) == 4 && read(fds[0], text, 4) == 4);
     CHECK(memcmp(text, "pipe", 4) == 0);

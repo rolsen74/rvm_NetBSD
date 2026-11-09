@@ -2,6 +2,8 @@
 /obj.rvm-diskroot/
 /obj.rvm-diskroot-diag/
 /obj.rvm-kernel/
+/obj.rvm-native-clean/
+/obj.rvm-native-root/
 /obj.rvm-native-libc-guest/
 /obj.rvm-native-userland/
 /obj.rvm-user/

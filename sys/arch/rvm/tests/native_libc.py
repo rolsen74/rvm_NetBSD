@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--reuse-tree', type=Path,
                         help='repack an explicitly exported fixture tree after relinking tests')
     parser.add_argument('--ram-mib', type=int, default=64)
-    parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--timeout', type=float, default=300)
     args = parser.parse_args()
     obj, kernel, cross = args.objdir.resolve(), args.kernel_objdir.resolve(), args.toolchain.resolve()
     work = obj/'guest-tests'
@@ -32,7 +32,8 @@ def main():
     flags = ['-O2', '-mfpu', '-D_NETBSD_SOURCE', '-nostdinc', '-isystem',
              str(obj/'destdir.rvm/usr/include'), '-isystem', gcc_include]
     programs = [
-        ('native-libc-check', [ROOT/'sys/arch/rvm/tests/native_libc.c'],
+        ('native-libc-check', [ROOT/'sys/arch/rvm/tests/native_libc.c',
+                               ROOT/'sys/arch/rvm/tests/native_syscall.S'],
          'RVM normal libc: startup, stdio, errno, heap, FP control, contexts, TLS and shared RAS atomics verified'),
         ('native-constructors', [STAND/'user'/name for name in
          ('constructor_check.c', 'constructor_other.c', 'constructor_preinit.S')],
@@ -41,12 +42,17 @@ def main():
          'emulated TLS initialization, alignment, constructors, signals, fork/COW and exec verified')]
     programs.append(('native-context', [ROOT/'sys/arch/rvm/tests/native_context.c'],
         'RVM normal libc: makecontext/swapcontext arguments, return links, signal masks and FPU state verified'))
+    file_utilities = ('ls', 'test', 'mkdir', 'cp', 'mv', 'rm')
+    if all((obj/'bin'/name/name).is_file() for name in file_utilities):
+        programs.append(('native-utilities', [ROOT/'sys/arch/rvm/tests/native_utilities.c'],
+            'RVM native utilities: FFS mkdir, test, copy, recursive symlinks, rename, listing and removal verified'))
+    else:
+        file_utilities = ()
     math_library = obj/'lib/libm/libm.a'
     if math_library.exists():
-        math_main = work/'math-main.c'
-        math_main.write_text('int math_check(void);\nint main(void) { return math_check(); }\n')
-        programs.append(('native-math', [math_main, STAND/'user/math_check.c', STAND/'user/fpu_regs.S'],
-                         'fenv API, directed decimal conversion and binary64 libm verified'))
+        programs.append(('native-math', [ROOT/'sys/arch/rvm/tests/native_math.c',
+                         STAND/'user/math_check.c', STAND/'user/fpu_regs.S'],
+                         'RVM normal libm: binary32 FMA, elementary functions and complex argument/result ABI verified'))
     installs, commands = [], []
     for name, sources, marker in programs:
         objects = []
@@ -79,6 +85,14 @@ def main():
         if artifact.exists():
             installs += ['--install', str(artifact), '/bin/native-'+name]
             commands += ['--command', 'run /bin/native-'+name+arguments, expected]
+    for name in file_utilities:
+        installs += ['--install', str(obj/'bin'/name/name), '/bin/native-'+name]
+    shell = obj/'bin/sh/sh'
+    if shell.is_file():
+        installs += ['--install', str(shell), '/bin/sh',
+                     '--install', str(Path(__file__).with_name('native_shell.sh')), '/etc/native-shell.sh']
+        commands += ['--command', 'run /bin/sh /etc/native-shell.sh',
+            'RVM native shell: arithmetic, expansions, functions, pipelines, heredocs, traps and status verified\nstatus=0']
     makefs = Path(subprocess.check_output([str(obj/'nbmake-rvm'), '-C',
         str(ROOT/'lib/libc'), '-V', '${TOOL_MAKEFS}'], text=True).strip())
     if not makefs.is_file():
@@ -110,7 +124,8 @@ def main():
                         '--toolchain', str(cross)] + installs + export, check=True)
     subprocess.run([sys.executable, str(Path(__file__).with_name('console.py')),
                     '--objdir', str(work), '--vmemu', args.vmemu,
-                    '--ram-mib', str(args.ram_mib), '--timeout', str(args.timeout)] + commands, check=True)
+                    '--ram-mib', str(args.ram_mib), '--timeout', str(args.timeout)] +
+                   (['--shell'] if shell.is_file() else []) + commands, check=True)
     print('PASS: normal NetBSD libc/csu guest integration')
 
 

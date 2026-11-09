@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 sys.dont_write_bytecode = True
-from kernel_cc import adapt
+from kernel_cc import adapt, private_prefix
 from fhr_asm import normalize, raw_multiply_register
 from static_init import extract
 
@@ -36,7 +36,7 @@ def main():
     flags[flags.index('-c')] = '-E'
     flags[flags.index('-o') + 1] = str(raw)
     subprocess.run([cc, '-P'] + flags, check=True)
-    prefix = '__rvm_local_' + re.sub(r'\W', '_', target.stem) + '__'
+    prefix = private_prefix(target)
     source, weak = adapt(raw.read_text().replace('RVM_ASM_NL', '\n'), prefix)
     source, entries = extract(source)
     assembly = target.with_suffix('.fhr.s')
