@@ -1,0 +1,9 @@
+        .section .preinit_array,"aw",@progbits
+        .balign 8
+        .quad constructor_preinit
+        .section .init_array.00250,"aw",@progbits
+        .balign 8
+        .quad constructor_initarray
+        .section .fini_array.00250,"aw",@progbits
+        .balign 8
+        .quad constructor_finiarray

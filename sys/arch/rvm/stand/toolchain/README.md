@@ -148,3 +148,39 @@ selects `-mfpu`; the compiler default and kernel C build remain software float.
 Single precision, comparisons and conversions still use the runtime helpers.
 See [FPU integration](../../../../../doc/rvm-fpu-2026-11-08.md) for context
 preservation, rounding, limitations and the three-optimization guest test.
+
+The installed GCC/GAS now use FPU mnemonics, including the corrected FPushm
+and FMove opcode assignments. The port's register-bank assembly uses these
+mnemonics too. VMAsm and GAS accept `mfctrl FPCR,r0`, `mfctrl FPSR,r1`,
+`mtctrl r0,FPCR` and `mtctrl r1,FPSR`; VMDis prints those names. The existing
+16-bit control IDs remain 12 and 13. GAS now parses both operands of the
+control instructions, including the existing integer control registers.
+`rvm-control-registers.patch` records the incremental GAS fix against the
+FPU-enabled binutils overlay. The maintained sibling sources and installed
+tools include it. The previous tools/sources are backed up under
+`/tmp/rvm-fpctrl-update/backup/`.
+
+FP register-mask stack operations are spelled `fpushm` and `fpopm`; the old
+`fpush`/`fpop` spellings have been removed. GCC output, the MD math routines
+and VMDis use the mask mnemonics. Their encodings remain 0x01c2/0x01c0;
+the address-based `fpusha`/`fpopa` operations are unchanged.
+The prior compiler/tools are backed up under `/tmp/rvm-fpm-rename/backup/`.
+
+```sh
+python3 sys/arch/rvm/tests/fpu_control_tools.py
+```
+
+This checks all control-register encodings, FP register masks, malformed
+operands, rejection of the removed FP stack spellings and a
+GAS/VMAsm/VMDis round trip. See the
+[libm/fenv update](../../../../../doc/rvm-libm-fenv-2026-11-09.md) for the
+public environment API and native math runtime.
+
+# NetBSD type definitions
+
+`rvm-netbsd-types.patch` selects GCC's NetBSD integer-type definitions for the
+RVM NetBSD target, including the least-width types used by `uchar.h`. It adds
+NetBSD/unix predefined macros and a signed `wint_t`, while retaining the RVM
+unsigned `wchar_t` ABI. The maintained sibling compiler sources and installed
+`cc1` include this update. The previous compiler and configuration are backed
+up under `/tmp/rvm-stdint-update/backup/`.

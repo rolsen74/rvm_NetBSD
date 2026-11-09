@@ -18,6 +18,8 @@ citrus_lc_numeric citrus_lc_time citrus_lc_messages citrus_mmap citrus_db
 citrus_db_hash citrus_hash citrus_bcs citrus_lookup citrus_memstream
 citrus_module citrus_bcs_strtol'''.split()
 GEN = ['ctype_', 'tolower_', 'toupper_', 'isatty', 'sysconf', 'sysctl', 'sysctlgetmibinfo', 'isctype', 'fpclassifyd_ieee754', 'signbitd_ieee754', 'fpclassifyf_ieee754', 'signbitf_ieee754']
+GEN += ['isnand_ieee754', 'isnanf_ieee754', 'isinfd_ieee754', 'isinff_ieee754']
+GEN += ['isfinited_ieee754', 'isfinitef_ieee754']
 GEN += '''getcwd err errc errx verr verrc verrx warn warnc warnx
 vwarn vwarnc vwarnx sigsetops signal siglist times raise opendir readdir
 closedir initdir telldir setmode signalname signalnumber signalnext siginterrupt
@@ -40,7 +42,7 @@ def build(builder):
             target = builder.obj/(directory+'_'+name+'.o')
             extra = ['-D_LIBC', '-DWITH_RUNE']
             if directory == 'gdtoa':
-                extra += ['-DNO_FENV_H']
+                extra += ['-DHonor_FLT_ROUNDS']
             if directory == 'time':
                 extra += ['-I', str(builder.root/'lib/libc/time')]
                 if name == 'localtime':
@@ -94,10 +96,6 @@ def build(builder):
     target = builder.obj/'util_stat_flags.o'
     builder.compile(builder.root/'lib/libutil/stat_flags.c', target,
                     ['-I', str(builder.root/'lib/libutil')])
-    members.append(target)
-    target = builder.obj/'libm_floor.o'
-    builder.compile(builder.root/'lib/libm/src/s_floor.c', target,
-                    ['-I', str(builder.root/'lib/libm/src')])
     members.append(target)
     generated = builder.obj/'errlist.c'
     with generated.open('w') as output:

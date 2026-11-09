@@ -768,7 +768,7 @@ parsefloat(FILE *fp, wchar_t *buf, wchar_t *end, locale_t loc)
 		S_START, S_GOTSIGN, S_INF, S_NAN, S_MAYBEHEX,
 		S_DIGITS, S_FRAC, S_EXP, S_EXPDIGITS
 	} state = S_START;
-	wchar_t c;
+	wint_t c;
 	wchar_t decpt;
 	int gotmantdig = 0, ishex = 0;
 	mbstate_t conv_state;
@@ -871,7 +871,7 @@ reswitch:
 				gotmantdig = 1;
 			else {
 				state = S_FRAC;
-				if (c != decpt)
+				if (c != (wint_t)decpt)
 					goto reswitch;
 			}
 			if (gotmantdig)

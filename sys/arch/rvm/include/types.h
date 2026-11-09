@@ -22,6 +22,10 @@
 #define __HAVE_SYSCALL_INTERN 1
 #endif
 #define __HAVE_VM_PAGE_MD 1
+#define __HAVE_RAS
+#ifndef _KERNEL
+#define __HAVE_ATOMIC64_OPS
+#endif
 
 /* RVM's LP64 ABI aligns long/pointer objects to four bytes. On the current
  * uncached UP CPU a scalar load/store is one instruction even at this ABI

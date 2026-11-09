@@ -70,6 +70,8 @@
 #  define	NLIST_ELF64
 #elif defined(__or1k__)
 #  define	NLIST_ELF32
+#elif defined(__rvm__)
+/* FHR executable images do not retain a symbol table. */
 #else
 #  error	"Add your architecture here"
 #endif

@@ -36,10 +36,15 @@ def adapt(source, prefix):
                     flags=re.M)
     public = set(re.findall(r'^\s*\.(?:globl|global|weak)\s+([\w.]+)',
                             source, re.M))
+    # .comm is externally visible unless explicitly paired with .local.
+    # __attribute__((common)) is still emitted with -fno-common.
+    common = set(re.findall(r'^\s*\.comm\s+([\w.]+)', source, re.M))
+    local = set(re.findall(r'^\s*\.local\s+([\w.]+)', source, re.M))
+    public.update(common - local)
     weak = set(re.findall(r'^\s*\.weak\s+([\w.]+)', source, re.M))
-    defined = set(re.findall(r'^([\w.]+):', source, re.M))
+    defined = set(re.findall(r'^\s*([\w.]+):', source, re.M))
     defined.update(re.findall(r'^\s*\.comm\s+([\w.]+)', source, re.M))
-    defined.update(re.findall(r'^([\w.]+)\s*=', source, re.M))
+    defined.update(re.findall(r'^\s*([\w.]+)\s*=', source, re.M))
     defined.update(re.findall(r'^\s*\.set\s+([\w.]+)\s*,', source, re.M))
     private = {name: prefix + name for name in defined - public
                if not name.startswith('.L')}
@@ -72,6 +77,10 @@ def main():
     subprocess.run([cc] + flags, check=True)
     prefix = '__rvm_local_' + re.sub(r'\W', '_', target.stem) + '__'
     source, weak = adapt(raw.read_text(), prefix)
+    if os.environ.get('RVM_USER_INITIALIZERS') == '1':
+        from static_init import extract
+        source, entries = extract(source)
+        target.with_suffix('.init.json').write_text(json.dumps(entries)+'\n')
     assembly.write_text(''.join(normalize(source, prefix + 'lc',
                                raw_multiply_register(cc))))
     subprocess.run([cc, '-c', str(assembly), '-o', str(target)], check=True)

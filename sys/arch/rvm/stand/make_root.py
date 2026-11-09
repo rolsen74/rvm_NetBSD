@@ -57,6 +57,8 @@ def main():
     parser.add_argument('--install', nargs=2, action='append', default=[],
                         metavar=('HOST_FILE', 'GUEST_PATH'),
                         help='add a program to the disposable image')
+    parser.add_argument('--export-tree', type=Path,
+                        help='save the generated tree and adjacent .spec for local image repacking')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     obj = args.objdir.resolve()
@@ -115,10 +117,17 @@ def main():
                        root/'sys/arch/rvm/stand/user/jump_check.S',
                        root/'sys/arch/rvm/stand/user/native_check.c',
                        root/'sys/arch/rvm/stand/user/fpu_check.c',
+                       root/'sys/arch/rvm/stand/user/math_check.c',
                        root/'sys/arch/rvm/stand/user/cache_probe.S'], tree/'sbin/runtime-check')
         users.program([root/'sys/arch/rvm/stand/user/monitor.c'], tree/'sbin/rvm-monitor')
+        users.program([root/'sys/arch/rvm/stand/user/tls_check.c',
+                       root/'sys/arch/rvm/stand/user/tls_other.c'], tree/'sbin/tls-check')
+        users.program([root/'sys/arch/rvm/stand/user/constructor_check.c',
+                       root/'sys/arch/rvm/stand/user/constructor_other.c',
+                       root/'sys/arch/rvm/stand/user/constructor_preinit.S'], tree/'sbin/constructor-check')
         users.program([root/'sys/arch/rvm/stand/user/fpu_exec.c'], tree/'sbin/fpu-exec-check')
-        users.program([root/'sys/arch/rvm/stand/user/fpu_native_check.c'], tree/'sbin/fpu-native-check',
+        users.program([root/'sys/arch/rvm/stand/user/fpu_native_check.c',
+                       root/'sys/arch/rvm/stand/user/math_check.c'], tree/'sbin/fpu-native-check',
                       ['-mfpu', '-fno-math-errno'])
         users.program([root/'sys/arch/rvm/stand/user/echo.c'], tree/'bin/rvm-echo')
         users.program([root/'bin/sync/sync.c'], tree/'bin/sync')
@@ -130,7 +139,7 @@ def main():
         build_shell(users, tree/'bin/sh')
         exported = obj/'user'
         exported.mkdir(exist_ok=True)
-        for artifact in ('crt0.o', 'end.o', 'librvm.a'):
+        for artifact in ('crt0.o', 'end.o', 'librvm.a', 'librvm.init.json'):
             shutil.copyfile(work/'user'/artifact, exported/artifact)
         script = tree/'sbin/exec-script'
         script.write_text('#!/sbin/exec-check\n# Native FHR interpreter/argument integration fixture.\n')
@@ -178,6 +187,10 @@ def main():
         metadata.append('./dev/null type=char mode=0666 uid=0 gid=0 device=netbsd,242,2')
         metadata.append('./dev/zero type=char mode=0666 uid=0 gid=0 device=netbsd,242,12')
         spec.write_text('\n'.join(metadata) + '\n')
+        if args.export_tree is not None:
+            exported_tree = args.export_tree.resolve()
+            shutil.copytree(tree, exported_tree)
+            shutil.copyfile(spec, str(exported_tree)+'.spec')
         image = work/'root-fixture.img'
         subprocess.run([str(args.makefs.resolve()), '-t', 'ffs', '-B', 'be',
                         '-s', '16m', '-f', '256', '-F', str(spec), '-o',

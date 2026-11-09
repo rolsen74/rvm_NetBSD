@@ -37,6 +37,7 @@ __RCSID("$NetBSD: atexit.c,v 1.35 2025/10/18 20:03:33 riastradh Exp $");
 #include "reentrant.h"
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 #include "atexit.h"
@@ -52,6 +53,7 @@ struct atexit_handler {
 
 	void *ah_arg;	/* argument for cxa_atexit handlers */
 	void *ah_dso;	/* home DSO for cxa_atexit handlers */
+	bool ah_running;	/* descriptor is in use by an active callback */
 };
 
 /*
@@ -96,7 +98,8 @@ atexit_handler_alloc(void *dso)
 	if (dso == NULL) {
 		for (i = 0; i < NSTATIC_HANDLERS; i++) {
 			ah = &atexit_handler0[i];
-			if (ah->ah_atexit == NULL && ah->ah_next == NULL) {
+			if (ah->ah_atexit == NULL && ah->ah_next == NULL &&
+			    !ah->ah_running) {
 				/* Slot is free. */
 				return (ah);
 			}
@@ -164,6 +167,7 @@ __cxa_atexit_internal(void (*func)(void *), void *arg, void *dso)
 	ah->ah_cxa_atexit = func;
 	ah->ah_arg = arg;
 	ah->ah_dso = dso;
+	ah->ah_running = false;
 
 	ah->ah_next = atexit_handler_stack;
 	atexit_handler_stack = ah;
@@ -227,6 +231,10 @@ again:
 		if (dso == NULL || dso == ah->ah_dso || ah->ah_atexit == NULL) {
 			if (ah->ah_atexit != NULL) {
 				void *p = atexit_handler_stack;
+				/* The last static descriptor has ah_next == NULL.
+				 * Its cleared callback must not make it look free
+				 * while it calls atexit() recursively. */
+				ah->ah_running = true;
 				if (ah->ah_dso != NULL) {
 					cxa_func = ah->ah_cxa_atexit;
 					ah->ah_cxa_atexit = NULL;
@@ -236,6 +244,7 @@ again:
 					ah->ah_atexit = NULL;
 					(*atexit_func)();
 				}
+				ah->ah_running = false;
 				/* Restart if new atexit handler was added. */
 				if (p != atexit_handler_stack)
 					goto again;

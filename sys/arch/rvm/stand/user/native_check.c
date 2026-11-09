@@ -41,5 +41,21 @@ int native_check(void) {
     const char *files[] = { "/tmp/sh-output", "/tmp/sh-error", "/tmp/sh-background", "/tmp/sh-exec", "/tmp/sh-list" };
     for (unsigned i = 0; i < sizeof(files)/sizeof(files[0]); i++)
         if (unlink(files[i])) return 161;
+    fflush(NULL);
+    pid = fork();
+    if (!pid) {
+        char *args[] = { "/sbin/constructor-check", NULL };
+        execve(args[0], args, environ);
+        _exit(127);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || status != 0) return 165;
+    fflush(NULL);
+    pid = fork();
+    if (!pid) {
+        char *args[] = { "/sbin/tls-check", NULL };
+        execve(args[0], args, environ);
+        _exit(127);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || status != 0) return 167;
     return 0;
 }

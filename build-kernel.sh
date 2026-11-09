@@ -51,6 +51,7 @@ paths.append(Path(shutil.which(os.environ.get('VMASM', 'VMAsm')) or 'VMAsm'))
 paths.extend(Path('sys/arch/rvm/stand')/name
              for name in ('kernel_cc.py', 'fhr_asm.py', 'kernel_link.py'))
 digest = hashlib.sha256()
+digest.update(b'RVM_KERNEL_CPPFLAGS\0' + os.environ.get('RVM_KERNEL_CPPFLAGS', '').encode())
 for path in paths:
     digest.update(str(path.resolve()).encode())
     with path.open('rb') as stream:

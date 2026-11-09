@@ -28,6 +28,9 @@ static int state(unsigned rounding, unsigned exceptions) {
         result.f_fpcr == rounding && result.f_fpsr == (0x400 | exceptions);
 }
 int main(void) {
+    extern int math_check(void);
+    int error = math_check();
+    if (error) return error;
     rvm_fpu_save(&initial);
     for (unsigned i=0;i<RVM_NFPREG;i++) bank.f_regs[i]=UINT64_C(0x7ff8000012340000)|i;
     reset(0);

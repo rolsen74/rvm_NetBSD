@@ -20,4 +20,6 @@ ARCHDIR:=	${.CURDIR}/arch/${CSU_MACHINE_CPU}
 
 .PATH:	${ARCHDIR}
 .include "${ARCHDIR}/Makefile.inc"
+.if !defined(RVM_STATIC_FHR)
 .include "${.CURDIR}/common/Makefile.inc"
+.endif

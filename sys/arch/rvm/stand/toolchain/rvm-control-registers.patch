@@ -1,0 +1,89 @@
+--- a/gas/config/tc-rvm.c
++++ b/gas/config/tc-rvm.c
+@@ -366,6 +366,7 @@
+ {
+ 	AT_None,
+ 	AT_IReg,
++	AT_CReg,
+ 	AT_FReg,
+ 	AT_FRegMode,
+ 	AT_FMovem,
+@@ -949,8 +950,8 @@
+ 	  { "emuexit", Opcode_EmuExit, AT_None, AT_None, AT_None, AT_None },
+ 	  { "emufunc", Opcode_EmuFunc, AT_None, AT_None, AT_None, AT_None },
+ 	  { "syscall", Opcode_SysCall, AT_None, AT_None, AT_None, AT_None },
+-	  { "mfctrl", Opcode_MfCtrl, AT_IReg, AT_None, AT_None, AT_None },
+-	  { "mtctrl", Opcode_MtCtrl, AT_IReg, AT_None, AT_None, AT_None },
++	  { "mfctrl", Opcode_MfCtrl, AT_CReg, AT_IReg, AT_None, AT_None },
++	  { "mtctrl", Opcode_MtCtrl, AT_IReg, AT_CReg, AT_None, AT_None },
+ 	  { "cpuid", Opcode_Cpuid, AT_IReg, AT_None, AT_None, AT_None },
+ 	  { "pushf", Opcode_Pushf, AT_Movem, AT_None, AT_None, AT_None },
+ 	  { "pushm", Opcode_Pushm, AT_Movem, AT_None, AT_None, AT_None },
+@@ -1175,6 +1176,33 @@
+ 	return rvm_read_register ( buffer, pos, reg, false );
+ }
+ 
++/* Control-register IDs are part of the v0000 instruction ABI. */
++static int
++rvm_read_creg ( const char * buffer, int * pos, int * reg )
++{
++    static const char * const names[] = {
++        "sr", "pc", "cr", "usp", "ssp", "vbr", "mst", "mut",
++        "inst", "inte", "ud1", "ud2", "fpcr", "fpsr"
++    };
++    int p = *pos;
++    unsigned int i;
++    while ( buffer[p] == ' ' || buffer[p] == '\t' ) p++;
++    for ( i = 0; i < sizeof(names) / sizeof(names[0]); i++ )
++    {
++        unsigned int n = 0;
++        while ( names[i][n] &&
++                tolower ( (unsigned char) buffer[p+n] ) == names[i][n] ) n++;
++        if ( ! names[i][n] && ! isalnum ( (unsigned char) buffer[p+n] ) &&
++             buffer[p+n] != '_' && buffer[p+n] != '.' && buffer[p+n] != '$' )
++        {
++            *pos = p + n;
++            *reg = i;
++            return true;
++        }
++    }
++    return false;
++}
++
+ static int
+ rvm_read_freg ( const char * buffer, int * pos, int * reg )
+ {
+@@ -1493,6 +1521,19 @@
+ 			break;
+ 		}
+ 
++        case AT_CReg:
++        {
++            if ( ! rvm_read_creg ( argbuf, &p, &reg ) )
++                as_fatal ( "Error parsing control register" );
++            if ( outbuf )
++            {
++                outbuf[o] = (reg >> 8) & 0xff;
++                outbuf[o+1] = reg & 0xff;
++            }
++            o += 2;
++            break;
++        }
++
+ 		case AT_IReg:
+ 		{
+ 			if ( ! rvm_read_ireg ( argbuf, &p, &reg ) )
+@@ -1665,6 +1706,13 @@
+ 
+ 	outpos = rvm_fill_arg ( op, argbuf, outbuf, &argpos, outpos, op->Arg4 );
+ 
++    if ( op->OpcodeID == Opcode_MfCtrl || op->OpcodeID == Opcode_MtCtrl )
++    {
++        while ( argbuf[argpos] == ' ' || argbuf[argpos] == '\t' ) argpos++;
++        if ( argbuf[argpos] && argbuf[argpos] != ';' )
++            as_fatal ( "Unexpected trailing control-register operands" );
++    }
++
+ 	return ( outpos );
+ }
+ 

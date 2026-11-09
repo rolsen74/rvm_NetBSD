@@ -232,6 +232,20 @@ ARCH_SRCS += s_fmax.S s_fmaxf.S
 ARCH_SRCS += s_fmin.S s_fminf.S
 .endif
 
+.elif (${LIBC_MACHINE_CPU} == "rvm")
+.PATH: ${.CURDIR}/arch/rvm
+RVM_REAL_CC:= ${CC}
+.export RVM_REAL_CC
+CC=${NETBSDSRCDIR}/sys/arch/rvm/stand/user_cc.py
+OBJCOPY=true
+COMMON_SRCS+= s_rintl.c s_fma.c s_fmaf.c
+.if ${MKSOFTFLOAT} == "no"
+COPTS+= -mfpu
+COMMON_SRCS+= fenv.c fenvreg.S
+ARCH_SRCS = e_sqrt.S
+ARCH_SRCS+= s_lrint.S s_llrint.S s_lrintl.S s_llrintl.S
+.endif
+
 .elif (${LIBC_MACHINE_CPU} == "powerpc")
 .PATH:	${.CURDIR}/arch/powerpc
 .if ${MKSOFTFLOAT} == "no"

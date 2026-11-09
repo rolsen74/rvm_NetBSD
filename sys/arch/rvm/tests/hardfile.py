@@ -46,6 +46,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--objdir', type=Path, default=Path('obj.rvm-kernel'))
     parser.add_argument('--diskroot', action='store_true')
+    parser.add_argument('--software-float', action='store_true',
+                        help='expect the software arithmetic comparison runtime')
     parser.add_argument('--expect-icache', action='store_true',
                         help='require the experimental kernel I-cache and A/B checks')
     parser.add_argument('--expect-accel', action='store_true',
@@ -94,7 +96,12 @@ def main():
                         'setjmp register/stack restoration, signal masks and user signal trampoline verified',
                         'FPU register banks, FPCR/FPSR, scheduling, fork/exec, signals and ptrace verified',
                         'GCC native FPU arithmetic, sqrt/abs, rounding, exceptions and FP-register preservation verified',
+                        ('fenv controls, directed decimal conversion and software libm verified'
+                         if args.software_float else
+                         'fenv API, directed decimal conversion and binary64 libm verified'),
                         'native utilities and sh quoting, arithmetic, pipes, redirection, substitution, globbing, traps and wait verified',
+                        'preinit, constructor priorities, destructors, atexit and recursive exit verified',
+                        'emulated TLS initialization, alignment, constructors, signals, fork/COW and exec verified',
                         'unchanged NetBSD yes(1), pipe output and SIGPIPE containment verified',
                         'tty termios, canonical editing, EOF, raw input, poll and blocking wakeup verified',
                         'disk fork/exec/wait integration verified; starting console monitor',

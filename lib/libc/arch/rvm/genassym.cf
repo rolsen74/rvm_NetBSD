@@ -1,0 +1,5 @@
+include <sys/types.h>
+include <sys/ucontext.h>
+define UC_RV offsetof(ucontext_t, uc_mcontext.__gregs[_REG_RV])
+define UC_PC offsetof(ucontext_t, uc_mcontext.__gregs[_REG_PC])
+define UC_SP offsetof(ucontext_t, uc_mcontext.__gregs[_REG_SP])

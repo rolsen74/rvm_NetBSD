@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run GCC's native FPU output at -O0/-O2/-Os through the real user-mode port."""
 import argparse
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,20 +25,23 @@ def main():
     with tempfile.TemporaryDirectory(prefix='rvm-native-fpu-') as directory:
         work = Path(directory)
         builder = UserBuilder(args.toolchain, work/'user')
-        for name in ('crt0.o', 'end.o', 'librvm.a'):
+        for name in ('crt0.o', 'end.o', 'librvm.a', 'librvm.init.json'):
             shutil.copyfile(obj/'user'/name, builder.obj/name)
         installs, commands = [], []
         for opt in ('-O0', '-O2', '-Os'):
             name = 'fpu-'+opt[1:]
             program = work/name
-            builder.program([ROOT/'sys/arch/rvm/stand/user/fpu_native_check.c'], program,
+            builder.program([ROOT/'sys/arch/rvm/stand/user/fpu_native_check.c',
+                             ROOT/'sys/arch/rvm/stand/user/math_check.c'], program,
                             [opt, '-mfpu', '-fno-math-errno', '-frounding-math'])
             assembly = (builder.obj/'program-0-fpu_native_check.raw.s').read_text()
-            for opcode in ('0x01c8', '0x01c9', '0x01cb', '0x01ca', '0x01cc', '0x01cd'):
+            for opcode in ('fadd', 'fsub', 'fmul', 'fdiv', 'fabs', 'fsqrt'):
                 assert opcode in assembly, f'{opt}: missing native {opcode}'
             assert '__adddf3' not in assembly and '__muldf3' not in assembly, opt
+            assert 'fpushm ' in assembly and 'fpopm ' in assembly, opt
+            assert not re.search(r'(?i)\bf(?:push|pop)\s', assembly), opt
             installs += ['--install', str(program), '/bin/'+name]
-            commands += ['--command', 'run /bin/'+name, marker]
+            commands += ['--command', 'run /bin/'+name, marker+'\nstatus=0']
         for name in ('netbsd.fhr', 'bootloader.bin'):
             shutil.copyfile(obj/name, work/name)
         subprocess.run([sys.executable, str(ROOT/'sys/arch/rvm/stand/make_root.py'),

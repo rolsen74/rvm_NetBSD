@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--objdir', type=Path, default=Path('obj.rvm-diskroot'))
     parser.add_argument('--vmemu', default='VMEmu')
     parser.add_argument('--ram-mib', type=int, default=64)
+    parser.add_argument('--timeout', type=float, help='total seconds for boot and keyboard commands')
     parser.add_argument('--pixels', action='store_true',
                         help='compare rendered pixels before typing and after tty erase')
     parser.add_argument('--keypad', action='store_true',
@@ -98,7 +99,8 @@ def main():
                 keys.write(data)
         def capture(name):
             (work/'capture.request').write_text(str(work/(name+'.ppm'))+'\n')
-        deadline = time.monotonic() + (90 if args.shell else 60)
+        deadline = time.monotonic() + (args.timeout if args.timeout is not None else
+                                       (90 if args.shell else 60))
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
@@ -131,6 +133,9 @@ def main():
                         response = transcript.find(commands[step][1], offset)
                         prompt = commands[step][2]
                         ready = response >= 0 and (prompt is None or prompt in transcript[response:])
+                        if (response < 0 and commands[step][0].startswith(b'run ') and
+                            re.search(r'(?m)^status=[0-9]+\n', transcript[offset:])):
+                            break  # The child exited without its expected result.
                     if ready:
                         step += 1
                         if step == len(commands): break

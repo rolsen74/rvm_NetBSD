@@ -22,36 +22,44 @@ marker = 'RVM normal tools: binding, private symbols, pointer tables and alignme
 with tempfile.TemporaryDirectory(prefix='rvm-normal-tools-') as temporary:
     work = Path(temporary)
     (work/'a.c').write_text('''
+long common __attribute__((common));
+long common_read(void) { return common; }
 static long local = 17;
 static const long * const pointers[] = { &local };
 static long other = 31;
 static const long *volatile current = &other;
 long a(void) { current = pointers[0]; return *current; }
 int base(void) { return 7; }
+__asm__(".weak spaced_alias\\n  spaced_alias = base\\n");
 int alias(void) __attribute__((weak,alias("base")));
 __attribute__((weak)) int choose(void) { return 5; }
 ''')
     (work/'b.c').write_text('''
+extern long common;
+void common_set(void) { common = 42; }
 static long local = 29;
 long b(void) { return local; }
 #ifdef STRONG
 int choose(void) { return 9; }
 int alias(void) { return 21; }
+int spaced_alias(void) { return 23; }
 #endif
 ''')
     (work/'main.c').write_text('''
-extern long a(void), b(void);
-extern int choose(void), alias(void), base(void);
+extern long a(void), b(void), common_read(void);
+extern void common_set(void);
+extern int choose(void), alias(void), base(void), spaced_alias(void);
 extern unsigned long stack_address(void);
 extern void emit(int);
 char test_stack[65536] __attribute__((aligned(65536)));
 int check(void) {
     const char *s;
-    int ok = a() == 17 && b() == 29 && !(stack_address() & 65535);
+    common_set();
+    int ok = common_read() == 42 && a() == 17 && b() == 29 && !(stack_address() & 65535);
 #if STRONG
-    ok = ok && choose() == 9 && alias() == 21 && alias != base;
+    ok = ok && spaced_alias() == 23 && choose() == 9 && alias() == 21 && alias != base;
 #else
-    ok = ok && choose() == 5 && alias() == 7 && alias == base;
+    ok = ok && spaced_alias() == 7 && choose() == 5 && alias() == 7 && alias == base;
 #endif
     s = ok ? "''' + marker + '''\\n" : "RVM normal tools: FAILED\\n";
     while (*s) emit(*s++);

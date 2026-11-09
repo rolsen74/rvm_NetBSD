@@ -4,6 +4,10 @@ The subsequent [FPU/GCC update](rvm-fpu-2026-11-08.md) enables native binary64
 arithmetic and full process FP context preservation. Its details supersede
 the software-only floating-point description below.
 
+The [libm/fenv](rvm-libm-fenv-2026-11-09.md) and
+[static initialization](rvm-static-init-2026-11-09.md) updates also supersede
+the pending fenv and constructor support recorded below.
+
 The disk-root build now includes the tree's NetBSD `/bin/sh` in its `SMALL`
 configuration, together with native utilities. The PID 1 integration monitor
 remains available for bring-up. This extends the earlier

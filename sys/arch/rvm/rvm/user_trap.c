@@ -7,6 +7,7 @@
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/userret.h>
+#include <sys/ras.h>
 #include <uvm/uvm.h>
 #include <machine/frame.h>
 #include <machine/user.h>
@@ -75,6 +76,14 @@ rvm_user_return(struct lwp *l)
 	KASSERT(l == curlwp && !(l->l_flag & LW_SYSTEM));
 	l->l_md.md_astpending = 0;
 	mi_userret(l);
+	/* A descheduled user RAS must restart before it can commit a store
+	 * based on a value read before another LWP/process ran. Signal frame
+	 * capture performs the same adjustment in cpu_getmcontext(). */
+	if (l->l_proc->p_raslist != NULL) {
+		void *restart = ras_lookup(l->l_proc, (void *)l->l_md.md_tf->tf_pc);
+		if (restart != (void *)-1)
+			l->l_md.md_tf->tf_pc = (uintptr_t)restart;
+	}
 	if (rvm_user_pmap_prepare(l->l_proc->p_vmspace->vm_map.pmap) != 0) {
 		mutex_enter(l->l_proc->p_lock);
 		sigexit(l, SIGKILL);
@@ -144,6 +153,12 @@ rvm_user_exception(struct rvm_exceptionframe *raw)
 				error = uvm_fault(&l->l_proc->p_vmspace->vm_map, trunc_page(va), VM_PROT_EXECUTE);
 		}
 		if (error != 0) {
+#ifdef RVM_USER_FAULT_TRACE
+			printf("RVM user fault: pid=%d vector=%u pc=%#lx va=%#lx sp=%#lx\n",
+			    (int)l->l_proc->p_pid, (unsigned)tf->tf_vector,
+			    (unsigned long)tf->tf_pc, (unsigned long)va,
+			    (unsigned long)tf->tf_usp);
+#endif
 			struct vm_map *map = &l->l_proc->p_vmspace->vm_map;
 			bool mapped = false;
 			if (va >= VM_MIN_ADDRESS && va < VM_MAXUSER_ADDRESS) {

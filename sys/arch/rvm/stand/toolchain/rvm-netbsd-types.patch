@@ -1,0 +1,33 @@
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -3626,6 +3626,9 @@
+ rvm-*-*)
+ 	target_has_targetm_common=no
+ 	tm_file="elfos.h rvm/rvm.h"
++	case ${target} in
++	  rvm-*-netbsd*) tm_file="elfos.h netbsd-stdint.h rvm/rvm.h rvm/netbsd.h" ;;
++	esac
+ 	tmake_file="rvm/t-rvm"
+ 	;;
+ *)
+--- /dev/null
++++ b/gcc/config/rvm/netbsd.h
+@@ -0,0 +1,18 @@
++/* NetBSD type conventions for the RVM LP64 port. */
++#ifndef GCC_RVM_NETBSD_H
++#define GCC_RVM_NETBSD_H
++
++/* Keep the existing unsigned wchar_t ABI, with NetBSD's signed wint_t so
++   WEOF and the rune/regular-expression interfaces use the same sentinel. */
++#undef WINT_TYPE
++#define WINT_TYPE "int"
++
++#define TARGET_OS_CPP_BUILTINS() \
++  do { \
++    builtin_define ("__NetBSD__"); \
++    builtin_define ("__unix__"); \
++    builtin_assert ("system=NetBSD"); \
++    builtin_assert ("system=unix"); \
++  } while (0)
++
++#endif

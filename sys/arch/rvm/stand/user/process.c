@@ -43,6 +43,8 @@ int mount(const char *type, const char *path, int flags, void *data, size_t size
     return result(CALL(__mount50,type,path,flags,data,size,0,0,0));
 }
 lwpid_t _lwp_self(void) { return CALL(_lwp_self,0,0,0,0,0,0,0,0); }
+void *_lwp_getprivate(void) { return (void *)CALL(_lwp_getprivate,0,0,0,0,0,0,0,0); }
+void _lwp_setprivate(void *p) { (void)result(CALL(_lwp_setprivate,p,0,0,0,0,0,0,0)); }
 int _lwp_kill(lwpid_t lid, int sig) { return result(CALL(_lwp_kill,lid,sig,0,0,0,0,0,0)); }
 int sigprocmask(int how, const sigset_t *s, sigset_t *old) { return result(CALL(__sigprocmask14,how,s,old,0,0,0,0,0)); }
 int sigpending(sigset_t *s) { return result(CALL(__sigpending14,s,0,0,0,0,0,0,0)); }

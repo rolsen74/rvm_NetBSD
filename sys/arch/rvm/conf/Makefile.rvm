@@ -10,8 +10,8 @@ OPT_MODULAR=%MODULAR%
 # FHR objcopy cannot yet round-trip these relocatable objects. Keep symbols;
 # kernel_cc.py already scopes local names and kernel_link.py needs them.
 KERNMISCMAKEFLAGS+=OBJCOPY=true LORDER=echo TSORT=cat
-CPPFLAGS+=-DNO_KERNEL_RCSIDS -D__NetBSD__ -DRVM_KERNEL
-CFLAGS+=-fno-builtin -fno-pic -fno-pie -fno-stack-protector
+CPPFLAGS+=-DNO_KERNEL_RCSIDS -D__NetBSD__ -DRVM_KERNEL ${RVM_KERNEL_CPPFLAGS}
+CFLAGS+=-fno-builtin -fno-pic -fno-pie -fno-stack-protector -mno-fpu
 DEBUG=
 ENTRYPOINT=_start
 # FHR lays out/relocates sections in the loader, rather than an ELF ldscript.

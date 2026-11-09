@@ -109,6 +109,7 @@ static const struct {
 #ifdef NLIST_ELF64
 	{	__fdnlist_elf64		},
 #endif
+	{	NULL			},
 };
 
 int
@@ -136,8 +137,10 @@ __fdnlist(int fd, struct nlist *list)
 	_DIAGASSERT(fd != -1);
 	_DIAGASSERT(list != NULL);
 
-	for (i = 0; i < sizeof(fdnlist_fmts) / sizeof(fdnlist_fmts[0]); i++)
+	for (i = 0; fdnlist_fmts[i].fdnlist != NULL; i++)
 		if ((rv = (*fdnlist_fmts[i].fdnlist)(fd, list)) != -1)
 			return (rv);
+	if (fdnlist_fmts[0].fdnlist == NULL)
+		errno = ENOEXEC;
 	return (-1);
 }

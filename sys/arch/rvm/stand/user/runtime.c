@@ -1,6 +1,6 @@
 /* Small single-threaded static runtime for port bring-up. Uses native NetBSD
- * syscall numbers, structures and errno values. No TLS, dynamic linker,
- * constructors or thread support yet. Stdio, allocator,
+ * syscall numbers, structures and errno values. Emulated TLS is single-LWP;
+ * a dynamic linker and thread support remain unported. Stdio, allocator,
  * environment and atexit routines come from NetBSD libc.
  */
 #include "rvm_user.h"
@@ -113,7 +113,12 @@ open(const char *path, int flags, ...)
 void _exit(int status) { CALL(exit,status,0,0,0,0,0,0,0); for (;;) { } }
 void (*__cleanup)(void);
 extern void __cxa_finalize(void *);
+extern void __rvm_run_init(void);
+extern void __rvm_run_fini(void);
 void exit(int status) {
+	__cxa_finalize(0);
+	__rvm_run_fini();
+	/* Destructors may register additional exit handlers. */
 	__cxa_finalize(0);
 	if (__cleanup) (*__cleanup)();
 	_exit(status);
@@ -142,5 +147,6 @@ __rvm_start(long argc, char **argv, char **envp, struct ps_strings *ps)
 	__progname = argc > 0 ? argv[0] : "";
 	for (char *p = __progname; *p; p++)
 		if (*p == '/') __progname = p + 1;
+	__rvm_run_init();
 	exit(main(argc, argv, envp));
 }

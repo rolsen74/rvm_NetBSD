@@ -89,6 +89,9 @@ main(int argc, char **argv, char **envp)
 	extern int fpu_check(void);
 	int fpu_error = fpu_check();
 	if (fpu_error) return fpu_error;
+	extern int math_check(void);
+	int math_error = math_check();
+	if (math_error) return math_error;
 	extern int native_check(void);
 	int native_error = native_check();
 	if (native_error) return native_error;

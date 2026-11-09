@@ -9,7 +9,7 @@ RVM_LD := $(CROSS_COMPILE)ld
 VMASM ?= VMAsm
 VMEMU ?= VMEmu
 TEST_SUITE ?= new
-BOOT_CFLAGS := -std=gnu11 -O2 -ffreestanding -fno-builtin \
+BOOT_CFLAGS := -std=gnu11 -O2 -ffreestanding -fno-builtin -mno-fpu \
 	-fno-stack-protector -fno-pic -fno-pie -fno-merge-constants \
 	-nostdinc -Wall -Wextra -Werror -MMD -MP
 HEADER_FLAGS := -D_KERNEL -I$(OBJDIR)/include -I$(SRC_TOP)/sys -I$(SRC_TOP)/common/include

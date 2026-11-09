@@ -1,5 +1,24 @@
 # NetBSD/RVM bring-up
 
+The [native libc/csu build](../../../doc/rvm-native-libc-2026-11-09.md) builds
+the normal static libc catalog and startup objects with BSD make, plus selected
+native utilities. Guest checks cover user atomics, context switching,
+constructors, TLS, math/fenv and utility execution. The default disk-root image
+continues to use the bootstrap runtime while the remaining userland is ported.
+
+The [emulated TLS update](../../../doc/rvm-tls-2026-11-09.md) adds C `__thread`
+and C11 `_Thread_local` support for the single-LWP static runtime, including
+constructor/destructor access, fork/COW and exec reset, plus LWP-private pointer
+syscall veneers. Native ELF TLS and pthreads remain to be ported.
+
+The [static initialization update](../../../doc/rvm-static-init-2026-11-09.md)
+adds preinit, prioritized C constructors/destructors and initialization from
+selected archive members, including normal and recursive process-exit checks.
+
+The [libm/fenv update](../../../doc/rvm-libm-fenv-2026-11-09.md) adds the C
+floating-point environment API, directed decimal formatting/parsing and a
+binary64 NetBSD math runtime, with native sqrt and integer-rounding conversions.
+
 The [FPU/GCC update](../../../doc/rvm-fpu-2026-11-08.md) adds native binary64
 code generation with `-mfpu`, enabled by the userland builder, and preserves
 all 64 FP registers and FPCR/FPSR across scheduling, fork/exec, signals,
@@ -30,7 +49,7 @@ interactive `rvm#` monitor that reads files and launches C programs. NetBSD's
 allocator, environment routines, exit handlers and PATH lookup now work, and
 unchanged NetBSD utilities and `sh` are installed in the image. The library
 now includes FILE streams, formatting/scanning, directory traversal and
-C/POSIX locale support. Full libc/csu build integration, TLS, pthreads,
+C/POSIX locale support. More normal userland libraries/programs, native ELF TLS, pthreads,
 dynamic linking and production init remain to be ported.
 See the [libc progress notes](../../../doc/rvm-libc-2026-11-08.md).
 The earlier [kernel-only instruction-cache configuration](../../../doc/rvm-icache-2026-11-08.md)
@@ -74,9 +93,9 @@ python3 sys/arch/rvm/tests/console.py
 
 EARLY adds test fixtures; GENERIC uses the same syscall/trap/signal code.
 The console now uses MI tty queues, canonical/raw reads, echo, termios and
-polling of GeneralDriver ASCII key-down events. Core-file output,
-TLS and floating-point contexts remain unsupported. The entropy warning is
-expected without a registered seed/RNG. The normal kernel uses slow MI softints;
+polling of GeneralDriver ASCII key-down events. Core-file output and native ELF TLS
+remain unsupported. The entropy warning is expected in configurations without
+a registered seed/RNG. The normal kernel uses slow MI softints;
 user return handles MI rescheduling and pending signals.
 
 The remaining sections record historical standalone stages; their pending-work
