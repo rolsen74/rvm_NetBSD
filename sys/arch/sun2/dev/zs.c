@@ -1,4 +1,4 @@
-/*	$NetBSD: zs.c,v 1.26 2023/12/12 23:38:11 andvar Exp $	*/
+/*	$NetBSD: zs.c,v 1.29 2026/11/08 19:51:14 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.26 2023/12/12 23:38:11 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.29 2026/11/08 19:51:14 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -66,9 +66,6 @@ __KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.26 2023/12/12 23:38:11 andvar Exp $");
 #include <dev/cons.h>
 #include <dev/ic/z8530reg.h>
 #include <dev/sun/kbd_ms_ttyvar.h>
-
-#include <ddb/db_active.h>
-#include <ddb/db_output.h>
 
 #include <sun2/dev/cons.h>
 
@@ -549,7 +546,7 @@ extern void Debugger(void);
  * Handle user request to enter kernel debugger.
  */
 void
-zs_abort(struct zs_chanstate *cs)
+zs_abort(void)
 {
 	volatile struct zschan *zc = zs_conschan_get;
 	int rr0;
@@ -562,7 +559,7 @@ zs_abort(struct zs_chanstate *cs)
 	} while (rr0 & ZSRR0_BREAK);
 
 #if defined(KGDB)
-	zskgdb(cs);
+	zskgdb();
 #elif defined(DDB)
 	if (!db_active)
 		Debugger();
