@@ -30,7 +30,11 @@ with tempfile.TemporaryDirectory(prefix='rvm-gcc-opts-') as directory:
     work = Path(directory)
     source = Path(__file__).with_suffix('.c')
     checks = ['if (leaf() != -1 || zeros() != 0) return 1;',
-              'if (stack_args(1,2,3,4,5,6,7,8,9,10) != 55) return 2;']
+              'if (stack_args(1,2,3,4,5,6,7,8,9,10) != 55) return 2;',
+              'if (read_args(4, 9) != 13 || saved_register_probe() != 0) return 16;',
+              'v = 17; mask_add(&v, 12); if (v != 29 || guard_result != 37) return 17;',
+              'if (mask_cas(&v, 28, 41) != 29 || v != 29) return 18;',
+              'if (mask_cas(&v, 29, 41) != 29 || v != 41 || guard_result != 37) return 19;']
     values = [0, 1, 2, 255, 256, 257, 511, 512, 0x7fffffff, 0x80000000,
               0xffffffff, 0x100000000, 0xfeedface00000000, 0xffffffffffffffff]
     for x in values:
@@ -76,13 +80,26 @@ with tempfile.TemporaryDirectory(prefix='rvm-gcc-opts-') as directory:
     (work/'driver.c').write_text(prototypes + '''
 extern int dirty_mask(unsigned long), dirty_mask2(unsigned long);
 extern void emit(int);
+extern int saved_register_probe(void);
+extern int frame_abi_checks(void);
 char test_stack[65536] __attribute__((aligned(65536)));
 int yes(unsigned x) { (void)x; return 11; }
 int no(unsigned x) { (void)x; return 17; }
 static volatile int current;
+static volatile unsigned long guard_result;
+unsigned long irq_enter(void) { return 37; }
+void irq_leave(unsigned long value) { guard_result = value; }
+void *memcpy(void *to, const void *from, unsigned long length) {
+    volatile unsigned char *d = to;
+    const volatile unsigned char *s = from;
+    while (length--) *d++ = *s++;
+    return to;
+}
 int getvalue(void) { return current; }
 unsigned long sink(unsigned long a, unsigned long b, unsigned long c) { return a | b | c; }
 int check(void) {
+    int abi = frame_abi_checks();
+    if (abi) return 20 + abi;
     unsigned long x, v, ur; unsigned u, ur32; int s, sr32; long sr;
     unsigned char c; unsigned short h;
     current = 0; if (move_branch() != 17) return 15;
@@ -126,6 +143,25 @@ dirty_mask:
  xref mask2
 dirty_mask2:
  jmp mask2
+ xdef saved_register_probe
+ xref mask_asm
+saved_register_probe:
+ pushm r21/r37
+ sub.q #64,r63
+ move.q #0x123456789abcdeff,r21
+ move.q #0xfedcba9876543210,r37
+ jsr mask_asm
+ rclr.l r0
+ cmp.q #0x123456789abcdeff,r21
+ bne .Lbad_saved
+ cmp.q #0xfedcba9876543210,r37
+ beq .Lsaved_done
+.Lbad_saved:
+ move.l #1,r0
+.Lsaved_done:
+ add.q #64,r63
+ popm r21/r37
+ rts
 ''')
     subprocess.run(['VMAsm', '-i', 'entry.vma', '-o', 'entry.o', '--obj'],
                    cwd=work, check=True, stdout=subprocess.DEVNULL)
@@ -134,7 +170,8 @@ dirty_mask2:
     for level, frame in [('-O0', []), ('-O2', []), ('-Os', []),
                          ('-O2', ['-fno-omit-frame-pointer'])]:
         extra = ['-B' + str(args.compiler_dir.resolve()) + '/'] if args.compiler_dir else []
-        for src, obj in [(source, 'functions.o'), (work/'driver.c', 'driver.o')]:
+        for src, obj in [(source, 'functions.o'), (source.with_name('gcc_frame_abi.c'), 'frames.o'),
+                         (work/'driver.c', 'driver.o')]:
             subprocess.run(['python3', str(STAND/'kernel_cc.py'), level,
                             '-ffreestanding', '-fno-builtin', '-nostdinc'] + extra + frame +
                            ['-c', str(src), '-o', str(work/obj)], env=env, check=True)
@@ -142,6 +179,18 @@ dirty_mask2:
         def body(name):
             return assembly.split(name+':\n', 1)[1].split('\n\t.size', 1)[0]
         if not args.baseline and level != '-O0':
+            def saved(name):
+                match = re.search(r'\bpushf\s+([^\n]+)', body(name))
+                registers = set()
+                if match:
+                    for part in match[1].split('/'):
+                        ends = [int(x) for x in re.findall(r'r(\d+)', part)]
+                        registers.update(range(ends[0], ends[-1]+1))
+                return registers
+            assert 2 in saved('mask_add') and 3 not in saved('mask_add'), body('mask_add')
+            assert 2 in saved('mask_cas') and not {3, 4} & saved('mask_cas'), body('mask_cas')
+            assert saved('mask_asm') == {21, 37, 62}, body('mask_asm')
+            assert not {2, 3} & saved('read_args'), body('read_args')
             assert ('pushf' in body('leaf')) == bool(frame), body('leaf')
             assert ('popf' in body('leaf')) == bool(frame), body('leaf')
             for name, size, sign in [('divides', 'q', 's'), ('udivides', 'q', 'u'),
@@ -158,7 +207,7 @@ dirty_mask2:
             assert 'extu.l' in body('wide'), body('wide')
         subprocess.run(['python3', str(STAND/'kernel_link.py'), '--cc', env['RVM_REAL_CC'],
                         '--ld', args.cross+'ld', '--nm', args.cross+'nm', '--ar', args.cross+'ar',
-                        '-o', 'netbsd.fhr', 'entry.o', 'functions.o', 'driver.o'],
+                        '-o', 'netbsd.fhr', 'entry.o', 'functions.o', 'frames.o', 'driver.o'],
                        cwd=work, env=env, check=True, stdout=subprocess.DEVNULL)
         try:
             result = subprocess.run([args.vmemu, '-c', 'vm.config'], cwd=work,

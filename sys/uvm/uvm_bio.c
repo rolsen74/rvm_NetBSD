@@ -284,8 +284,16 @@ ubc_fault_page(const struct uvm_faultinfo *ufi, const struct ubc_map *umap,
 	    pg->offset < umap->writeoff ||
 	    pg->offset + PAGE_SIZE > umap->writeoff + umap->writelen);
 
+	/*
+	 * PG_RDONLY may describe holes outside this write's allocated range,
+	 * especially when filesystem blocks are smaller than a VM page.
+	 * The caller allocated umap->writeoff/writelen before ubc_alloc(),
+	 * so its bounded write needs a writable kernel window even then.
+	 * Keep PG_RDONLY itself, and other mappings of the page, unchanged.
+	 */
 	rdonly = uvm_pagereadonly_p(pg);
-	mask = rdonly ? ~VM_PROT_WRITE : VM_PROT_ALL;
+	mask = rdonly && (access_type & VM_PROT_WRITE) == 0 ?
+	    ~VM_PROT_WRITE : VM_PROT_ALL;
 
 	error = pmap_enter(ufi->orig_map->pmap, va, VM_PAGE_TO_PHYS(pg),
 	    prot & mask, PMAP_CANFAIL | (access_type & mask));

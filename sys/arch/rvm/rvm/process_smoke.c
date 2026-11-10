@@ -17,7 +17,8 @@ __CTASSERT(SIGUSR1 == RVM_PROCESS_SIGNAL);
 void rvm_process_smoke(void);
 extern char rvm_process_code[], rvm_process_end[];
 extern char rvm_process_message[], rvm_process_message_end[];
-extern char rvm_process_signal_handler[], rvm_process_signal_trampoline[];
+vaddr_t rvm_process_handler_address(void);
+vaddr_t rvm_process_trampoline_address(void);
 #define CHECK(c) do { if (!(c)) panic("RVM process check: " #c); } while (0)
 
 static void
@@ -62,13 +63,12 @@ process_start(void *arg)
 	struct sigaction action;
 	memset(&action, 0, sizeof(action));
 	action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
-	action.sa_handler = (void *)(0x400000 +
-	    (rvm_process_signal_handler - rvm_process_code));
+	action.sa_handler = (void *)rvm_process_handler_address();
 	sigemptyset(&action.sa_mask);
 	CHECK(copyout(&action, (void *)0x500400, sizeof(action)) == 0);
 	stack_t altstack = { .ss_sp = (void *)0x700000, .ss_size = PAGE_SIZE, .ss_flags = 0 };
 	CHECK(copyout(&altstack, (void *)0x500480, sizeof(altstack)) == 0);
-	vaddr_t trampoline = 0x400000 + (rvm_process_signal_trampoline - rvm_process_code);
+	vaddr_t trampoline = rvm_process_trampoline_address();
 	CHECK(copyout(&trampoline, (void *)0x5004a0, sizeof(trampoline)) == 0);
 	CHECK(uvm_map_protect(&p->p_vmspace->vm_map, 0x400000,
 	    0x400000 + PAGE_SIZE, UVM_PROT_RX, false) == 0);

@@ -248,6 +248,23 @@ rvm_process_signal_trampoline:
         syscall
         jmp rvm_process_failure
 rvm_process_end:
+        /* Kernel helpers, outside the bytes copied into user space. Keep
+         * relocations on the actual symbols; add the user VA base only
+         * after subtracting the kernel source address. r0/r1 are scratch. */
+        xdef rvm_process_handler_address
+rvm_process_handler_address:
+        move.q #rvm_process_signal_handler,r0
+        move.q #rvm_process_code,r1
+        rsub.q r1,r0,r0
+        add.q #0x400000,r0
+        rts
+        xdef rvm_process_trampoline_address
+rvm_process_trampoline_address:
+        move.q #rvm_process_signal_trampoline,r0
+        move.q #rvm_process_code,r1
+        rsub.q r1,r0,r0
+        add.q #0x400000,r0
+        rts
         section ".rodata",data_ro
         xdef rvm_process_message
         xdef rvm_process_message_end

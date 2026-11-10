@@ -16,6 +16,48 @@ import sys
 import tempfile
 
 
+def split_bss(source):
+    """Separate staging storage before assembling FHR objects with one data section."""
+    code, storage = [], []
+    active = False
+    for line in source.splitlines(keepends=True):
+        section = re.match(r'\s*\.(text|data|section)\b(.*)', line)
+        if section:
+            active = section[1] == 'section' and section[2].strip() == '.rvm.bss'
+            if active:
+                line = '\t.data\n'
+        (storage if active else code).append(line)
+    names = set(re.findall(r'^([\w.]+):', ''.join(storage), re.M))
+    # Private names already have per-object prefixes. Export them between
+    # these temporary objects without changing their visibility elsewhere.
+    source = re.sub(r'^\s*\.local[^\n]*\n', '', ''.join(code), flags=re.M)
+    data = re.sub(r'^\s*\.local[^\n]*\n', '', ''.join(storage), flags=re.M)
+    data = '.data\n' + ''.join('.global '+name+'\n' for name in sorted(names)) + data
+    return source, data if names else None
+
+
+def section_script(link_sets, storage):
+    """Merge runtime tables while retaining each NetBSD linker-set range."""
+    lines = ['SECTIONS {', '. = 0;',
+             '.text : { *(.text .text.*) }',
+             '.data : {',
+             '*(EXCLUDE_FILE (' + ' '.join(json.dumps(str(p) + '*') for p in storage) +
+             ') .data .data.*)' if storage else '*(.data .data.*)']
+    for name in sorted(link_sets):
+        lines += ['. = ALIGN(8);', f'__start_{name} = .;',
+                  f'KEEP(*({name}))', f'__stop_{name} = .;']
+    # FHR GAS retains quotes in the version note's input section name.
+    lines += ['*(link_set_*)',
+              '*(.note.netbsd.ident ?.note.netbsd.ident?)', '}',
+              '.rodata : { *(.rodata .rodata.*) }',
+              '.bss (NOLOAD) : {']
+    for path in storage:
+        # A filename wildcard prevents implicit loading ahead of _start.
+        lines.append(f'{json.dumps(str(path) + "*")}(.data)')
+    lines += ['*(.rvm.bss .bss .bss.*) *(COMMON)', '}', '}']
+    return '\n'.join(lines) + '\n'
+
+
 def shadow(source, names, prefix):
     output = []
     for line in source.splitlines(keepends=True):
@@ -64,12 +106,15 @@ def link(args):
         weak = []
         definitions = []
         strong = set()
+        link_sets = set()
         for path, origin in zip(objects, origins):
             metadata = origin.with_suffix('.weak.json')
             names = set(json.loads(metadata.read_text())) if metadata.exists() else set()
-            symbols = subprocess.check_output([args.nm, '-P', '-g',
-                                               '--defined-only', str(path)], text=True)
-            defined = {line.split()[0] for line in symbols.splitlines() if line.strip()}
+            symbols = subprocess.check_output([args.nm, '-P', '-g', str(path)], text=True)
+            records = [line.split() for line in symbols.splitlines() if line.strip()]
+            defined = {record[0] for record in records if record[1] != 'U'}
+            link_sets.update(match[1] for record in records
+                             if (match := re.fullmatch(r'__(?:start|stop)_(link_set_\w+)', record[0])))
             weak.append(names & defined)
             definitions.append(defined)
             strong.update(defined - names)
@@ -88,7 +133,28 @@ def link(args):
             target = rewritten.with_suffix('.o')
             subprocess.run([args.cc, '-c', str(rewritten), '-o', str(target)], check=True)
             objects[index] = target
-        subprocess.run([args.ld, '-e', args.entry, '-Map', str(args.output) + '.map',
+        storage = []
+        for index, (path, origin) in enumerate(zip(objects, origins)):
+            assembly = (path.with_suffix('.s') if path.parent == work
+                        and path.with_suffix('.s').exists() else origin.with_suffix('.fhr.s'))
+            if not assembly.exists():
+                continue
+            code, zero = split_bss(assembly.read_text())
+            if zero is None:
+                continue
+            for kind, source in (('code', code), ('bss', zero)):
+                rewritten = work / f'{index}-{kind}.s'
+                rewritten.write_text(source)
+                target = rewritten.with_suffix('.o')
+                subprocess.run([args.cc, '-c', str(rewritten), '-o', str(target)], check=True)
+                if kind == 'code':
+                    objects[index] = target
+                else:
+                    storage.append(target)
+        objects.extend(storage)
+        script = work / 'kernel.ld'
+        script.write_text(section_script(link_sets, storage))
+        subprocess.run([args.ld, '-T', str(script), '-e', args.entry, '-Map', str(args.output) + '.map',
                         '-o', str(args.output)] + list(map(str, objects)), check=True)
         # FHR executables do not encode e_entry. The loader starts at the
         # first code byte, even when ld was passed a different -e symbol.

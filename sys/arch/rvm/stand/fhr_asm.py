@@ -2,8 +2,8 @@
 """Normalize GCC assembly for FHR without editing MI C or the toolchain.
 
 FHR currently loses .LC string labels and mishandles .comm storage. Give
-string labels ordinary names and emit common storage as zero-filled data,
-matching the explicit .data workaround already used by the RVM bootstrap.
+string labels ordinary names and emit common storage explicitly. Kernels
+stage zero-filled storage for kernel_link.py; bootstrap/userland keep .data.
 """
 from pathlib import Path
 import argparse
@@ -41,8 +41,11 @@ def raw_multiply_register(cc):
         raise SystemExit('Unknown multiply encoding; review the FHR assembler adapter')
 
 
-def _normalize_sections(source, prefix, raw_mul=False):
+def _normalize_sections(source, prefix, raw_mul=False, separate_bss=False):
     local = set(re.findall(r'^\s*\.local\s+([\w.]+)\s*$', source, re.MULTILINE))
+    # BSS1 objects currently lose their size when read by BFD. Keep bytes in
+    # a staging data section; kernel_link converts it to NOLOAD only at link.
+    zero_section = '\t.section .rvm.bss\n' if separate_bss else '\t.data\n'
     section = '\t.text\n'
     for line in source.splitlines(keepends=True):
         common = re.fullmatch(r'\s*\.comm\s+([\w.]+),\s*(\d+),\s*(\d+)\s*', line)
@@ -50,13 +53,13 @@ def _normalize_sections(source, prefix, raw_mul=False):
             name, size, alignment = common.groups()
             if name not in local:
                 yield f'\t.globl {name}\n'
-            yield f'\t.data\n\t.balign {max(4, int(alignment))}\n{name}:\n\t.zero {size}\n'
+            yield f'{zero_section}\t.balign {max(4, int(alignment))}\n{name}:\n\t.zero {size}\n'
             # .comm allocates independent storage without changing the active
             # section. Functions can follow it without another .text directive.
             yield section
         elif re.match(r'^\s*(?:\.bss\s*$|\.section\s+\.bss(?:,|\s|$))', line):
-            section = '\t.data\n'
-            yield '\t.data\n'
+            section = zero_section
+            yield section
         elif re.match(r'^\s*\.section\s+\.data(?:\b|\.)', line):
             section = '\t.data\n'
             yield section
@@ -115,7 +118,7 @@ def storage_first(source):
             else:
                 chunks.append((kind, lines))
             writable = section[1] == 'data' or (
-                section[1] == 'section' and re.match(r'\s+\.data(?:\b|\.)', section[2]))
+                section[1] == 'section' and re.match(r'\s+\.(?:data(?:\b|\.)|rvm\.bss\b)', section[2]))
             kind, lines = bool(writable), [line]
         else:
             lines.append(line)
@@ -127,8 +130,8 @@ def storage_first(source):
                              for line in lines])
 
 
-def normalize(source, prefix, raw_mul=False):
-    yield storage_first(''.join(_normalize_sections(source, prefix, raw_mul)))
+def normalize(source, prefix, raw_mul=False, separate_bss=False):
+    yield storage_first(''.join(_normalize_sections(source, prefix, raw_mul, separate_bss)))
 
 
 if __name__ == '__main__':

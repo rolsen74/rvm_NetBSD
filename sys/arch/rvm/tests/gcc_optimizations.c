@@ -1,6 +1,18 @@
 /* Compile separately from the driver to keep inputs unknown to GCC. */
 extern int yes(unsigned), no(unsigned);
 extern int getvalue(void);
+extern unsigned long irq_enter(void);
+extern void irq_leave(unsigned long);
+
+void mask_add(volatile unsigned long *p, unsigned long n)
+{ unsigned long saved = irq_enter(); *p += n; irq_leave(saved); }
+unsigned long mask_cas(volatile unsigned long *p, unsigned long old, unsigned long value)
+{ unsigned long saved = irq_enter(), found = *p;
+  if (found == old) *p = value;
+  irq_leave(saved); return found; }
+unsigned long read_args(unsigned long a, unsigned long b) { return a + b; }
+void mask_asm(void)
+{ __asm__ volatile("rclr.b r21\n\trclr.l r37" ::: "r21", "r37"); }
 
 int mask(unsigned x) { if (x & 511) return yes(x); return no(x); }
 int mask2(unsigned x) { if (x & 2) return yes(x); return no(x); }

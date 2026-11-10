@@ -87,6 +87,25 @@ This adapter supports static kernels, not shared objects/loadable modules.
 The build also bypasses ELF objcopy/metadata post-processing that FHR cannot
 round-trip. These workarounds should eventually move into the object tools.
 
+The kernel linker groups output into `.text`, `.data`, `.rodata`, and `.bss`,
+in that order. The loader allocates each section on separate 64 KiB pages,
+so read-only data separates initialized writable data from writable BSS.
+NetBSD linker sets share `.data`, with explicit `__start_link_set_*` and
+`__stop_link_set_*` boundaries; the version note is folded into `.data` too.
+Zero-initialized storage uses FHR BSS0 and is cleared by the loader, without
+storing its zero bytes in the executable. Explicit `.data` attributes remain
+initialized data.
+
+Two toolchain limitations require an intermediate step. The BSS1 object reader
+replaces the recorded allocation size with eight bytes, and multiple writable
+input sections can produce incorrect relocations. `kernel_cc.py` marks zero
+storage as `.rvm.bss` in its saved assembly. After weak-symbol resolution,
+`kernel_link.py` assembles code/data and zero storage into separate temporary
+objects, each with ordinary `.data` and its original alignment. A generated
+linker script excludes the zero-storage objects from `.data` and collects
+them into the final NOLOAD `.bss`. Bootstrap and userland keep their existing
+zero-filled `.data` adapter.
+
 # FHR linker diagnostics
 
 `rvm-fhr-undefined-symbols.patch` applies to the maintained sibling
@@ -268,3 +287,32 @@ The first test checks exact encodings, malformed operands and a
 GAS/VMAsm/VMDis round trip. The second executes all bit positions, old-bit
 flags, result branches, memory-width guards and subword clears at `-O0`,
 `-O2` and `-Os`. The top bit may use a shorter sign test when appropriate.
+
+# Save only written integer registers
+
+`rvm-save-written-registers.patch` applies after the bit-operation updates.
+The maintained sibling backend and installed NetBSD `cc1` and `lto1` include
+it. Previous sources and compiler binaries are saved under
+`/tmp/rvm-save-mask/backup-installed/`.
+
+PUSHF masks now include written or explicitly clobbered registers rather than
+every live input. For example, `atomic_add_64` drops read-only R3 from its mask,
+and `atomic_cas_64` drops R3/R4. Modified argument registers, allocated working
+registers, subword clobbers and the frame pointer remain protected. Calls retain
+the previous void-return treatment of the result/scratch pair.
+
+The backend inspects the function's basic blocks, since prologue expansion uses
+a separate instruction sequence. It accounts for auto-increment notes and
+allocated pseudos during elimination, then freezes the mask after reload so
+stack-argument offsets and the emitted frame agree. Functions that only read
+argument registers may now qualify for the existing frameless-leaf path.
+
+```sh
+python3 sys/arch/rvm/tests/gcc_optimizations.py
+```
+
+The suite checks the add/CAS masks and verifies complete register preservation
+after byte/long asm clobbers. Its isolated argument-ABI fixture checks stacked
+and narrow arguments, stdarg/va_copy, nested calls, by-value aggregates, return
+structures and dynamic stack allocation at `-O0`, `-O2`, `-Os`, and with an
+explicit frame pointer. It needs no prebuilt bootstrap-kernel C objects.

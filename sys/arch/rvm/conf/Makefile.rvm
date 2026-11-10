@@ -14,7 +14,7 @@ CPPFLAGS+=-DNO_KERNEL_RCSIDS -D__NetBSD__ -DRVM_KERNEL ${RVM_KERNEL_CPPFLAGS}
 CFLAGS+=-fno-builtin -fno-pic -fno-pie -fno-stack-protector -mno-fpu
 DEBUG=
 ENTRYPOINT=_start
-# FHR lays out/relocates sections in the loader, rather than an ELF ldscript.
+# kernel_link.py groups sections; the FHR loader places and relocates them.
 LINKTEXT=
 LINKFLAGS_NORMAL=
 LINKFLAGS_DEBUG=
@@ -58,6 +58,8 @@ ${OBJS}: ${RVM_TOOLCHAIN_STAMP}
 
 # The backend does not implement GCC's stack-usage hook yet.
 CFLAGS:=${CFLAGS:N-fstack-usage:N-Wstack-usage=*}
+# kernel_link.py now emits real zero-filled BSS in the final FHR image.
+CFLAGS:=${CFLAGS:N-fno-zero-initialized-in-bss}
 COPTS.debugsyms.c=-g0
 SYSTEM_LD_TAIL_STAGE1=@true
 SYSTEM_LD_TAIL_STAGE2=@true

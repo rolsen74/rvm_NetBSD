@@ -30,6 +30,8 @@ def main():
                         help='password-change cipher; argon2id exercises the normal image configuration')
     parser.add_argument('--fsck', action='store_true',
                         help='force read-only filesystem checks through raw disk I/O before rc remounts root')
+    parser.add_argument('--ffs', action='store_true',
+                        help='check partial-page FFS writes and read-only user mappings')
     parser.add_argument('--tmpfs', action='store_true',
                         help='mount tmpfs and check mappings, truncation faults and its size limit')
     parser.add_argument('--pty', action='store_true',
@@ -45,7 +47,7 @@ def main():
         parser.error('--change-password requires --login')
     obj, kernel, cross = args.objdir.resolve(), args.kernel_objdir.resolve(), args.toolchain.resolve()
     fixture = args.fixture_tree.resolve()
-    work = obj/('pty-tests' if args.pty else 'tmpfs-tests' if args.tmpfs else 'fsck-tests' if args.fsck else 'init-tests')
+    work = obj/('ffs-tests' if args.ffs else 'pty-tests' if args.pty else 'tmpfs-tests' if args.tmpfs else 'fsck-tests' if args.fsck else 'init-tests')
     work.mkdir(exist_ok=True)
     cc = str(cross/'bin/rvm-netbsd-gcc')
     env = dict(os.environ, RVM_REAL_CC=cc)
@@ -94,7 +96,7 @@ int main(int argc, char **argv) {
     mount = work/'mount'
     subprocess.run([sys.executable, str(STAND/'user_prog.py'), '--toolchain', str(cross),
                     '--sysroot', str(obj/'destdir.rvm'), '-o', str(mount), str(target)], check=True)
-    for enabled, name, libraries in ((args.tmpfs, 'tmpfs', []), (args.pty, 'pty', ['-lutil'])):
+    for enabled, name, libraries in ((args.ffs, 'ffs', []), (args.tmpfs, 'tmpfs', []), (args.pty, 'pty', ['-lutil'])):
         if not enabled:
             continue
         target = work/(name+'.o')
@@ -117,6 +119,12 @@ int main(int argc, char **argv) {
             path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(original, path)
             path.chmod(0o755)
+        # Exported fixtures can contain the older bootstrap cat. Pair the
+        # native shell's pipeline regression with its native userland build.
+        native_cat = obj/'bin/cat/cat'
+        if native_cat.is_file():
+            shutil.copyfile(native_cat, tree/'bin/cat')
+            (tree/'bin/cat').chmod(0o755)
         for name in ('var/run', 'var/log'):
             (tree/name).mkdir(parents=True, exist_ok=True)
         administration = (('sbin/mount/mount', 'sbin/mount'),
@@ -153,6 +161,9 @@ int main(int argc, char **argv) {
                 shutil.copyfile(obj/'sbin'/name/name, tree/'sbin'/name)
                 (tree/'sbin'/name).chmod(0o755)
             (tree/'etc/fstab').write_text('/dev/ld0a / ffs rw 1 1\n')
+        if args.ffs:
+            shutil.copyfile(work/'ffs', tree/'bin/native-ffs')
+            (tree/'bin/native-ffs').chmod(0o755)
         if args.tmpfs:
             shutil.copyfile(obj/'sbin/mount_tmpfs/mount_tmpfs', tree/'sbin/mount_tmpfs')
             (tree/'sbin/mount_tmpfs').chmod(0o755)
@@ -188,7 +199,7 @@ echo 'RVM native fsck: forced read-only UFS2 passes through raw disk verified'
         (tree/'etc/rc').write_text('''#!/bin/sh
 set -e
 [ "$PPID" = 1 ]
-'''+filesystem_check+root_mount+tmpfs_check+pty_check+'''
+'''+filesystem_check+root_mount+('/bin/native-ffs\n' if args.ffs else '')+tmpfs_check+pty_check+'''
 /bin/sh /etc/native-shell.sh
 echo 'RVM native init: PID 1 ran /etc/rc successfully'
 ''')
@@ -240,6 +251,8 @@ echo 'RVM native init: PID 1 ran /etc/rc successfully'
             markers += ('RVM native init: normal mount, id and stty verified',)
         if args.fsck:
             markers += ('RVM native fsck: forced read-only UFS2 passes through raw disk verified',)
+        if args.ffs:
+            markers += ('RVM native FFS: partial-page sparse writes and read-only user mappings verified',)
         if args.tmpfs:
             markers += ('RVM native tmpfs: sparse files, shared/private mmap, fork, truncation SIGBUS and unlinked I/O verified',
                         'RVM native tmpfs: mount size limit and reclaimed capacity verified')
@@ -318,6 +331,8 @@ echo 'RVM native init: PID 1 ran /etc/rc successfully'
               'authenticated login' if args.login else 'getty login prompt')
     if args.fsck:
         detail = 'raw disk fsck and '+detail
+    if args.ffs:
+        detail = 'partial-page FFS writes/protection and '+detail
     if args.tmpfs:
         detail = 'tmpfs mappings/accounting and '+detail
     if args.pty:

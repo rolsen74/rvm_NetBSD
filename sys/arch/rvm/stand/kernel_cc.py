@@ -90,7 +90,10 @@ def main():
         source, entries = extract(source)
         target.with_suffix('.init.json').write_text(json.dumps(entries)+'\n')
     assembly.write_text(''.join(normalize(source, prefix + 'lc',
-                               raw_multiply_register(cc))))
+                               raw_multiply_register(cc),
+                               separate_bss=any(arg == '-DRVM_KERNEL' or
+                                                arg.startswith('-DRVM_KERNEL=')
+                                                for arg in args))))
     subprocess.run([cc, '-c', str(assembly), '-o', str(target)], check=True)
     target.with_suffix('.weak.json').write_text(json.dumps(weak) + '\n')
 

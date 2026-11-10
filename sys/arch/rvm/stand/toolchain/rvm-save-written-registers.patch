@@ -1,0 +1,82 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -326,6 +326,10 @@
+ /* Per-function machine data.  */
+ struct GTY ( () ) machine_function
+ {
++  /* Freeze the post-reload mask before emitting the prologue.  */
++  uint64_t frame_save_mask;
++  bool frame_save_mask_valid;
++
+ 	/* Number of bytes saved on the stack for callee saved registers.  */
+ 	int callee_saved_reg_size;
+ 
+@@ -715,16 +719,67 @@
+ // 			 ? (HOST_WIDE_INT) crtl->outgoing_args_size : 0);
+ // }
+ 
++/* Collect destinations, not input uses or implicit call argument clobbers.
++   During elimination, pseudos may still be present after allocation; translate
++   them through reg_renumber so incoming stack offsets use the same mask as
++   the final prologue.  Cover all words of a partially written wide register. */
++static void
++rvm_record_written_reg (rtx dest, const_rtx, void *data)
++{
++  while (SUBREG_P (dest))
++    dest = SUBREG_REG (dest);
++  if (!REG_P (dest))
++    return;
++  unsigned int regno = REGNO (dest);
++  if (regno >= FIRST_PSEUDO_REGISTER)
++    {
++      if (!reg_renumber || reg_renumber[regno] < 0)
++        return;
++      regno = reg_renumber[regno];
++    }
++  if (regno >= RVM_FP)
++    return;
++  uint64_t *written = static_cast<uint64_t *> (data);
++  unsigned int nregs = hard_regno_nregs (regno, GET_MODE (dest));
++  for (unsigned int i = regno; i < regno + nregs && i < RVM_FP; ++i)
++    *written |= 1ULL << i;
++}
++
+ /* PUSHF saves its mask, the selected registers, and establishes R62. */
+ static uint64_t
+ rvm_frame_save_mask (void)
+ {
++  if (cfun->machine->frame_save_mask_valid)
++    return cfun->machine->frame_save_mask;
++  uint64_t written = 0;
++  /* Prologue expansion uses a temporary instruction sequence.  Inspect the
++     function's basic blocks, not get_insns(), which can be empty there. */
++  basic_block bb;
++  rtx_insn *insn;
++  FOR_EACH_BB_FN (bb, cfun)
++    FOR_BB_INSNS (bb, insn)
++      if (NONDEBUG_INSN_P (insn))
++        {
++          note_stores (insn, rvm_record_written_reg, &written);
++          for (rtx note = REG_NOTES (insn); note; note = XEXP (note, 1))
++            if (REG_NOTE_KIND (note) == REG_INC)
++              rvm_record_written_reg (XEXP (note, 0), NULL_RTX, &written);
++          /* Calls can overwrite the result/scratch pair even without an
++             explicit result SET.  Preserve the existing void-return policy. */
++          if (CALL_P (insn))
++            written |= 3;
++        }
+   tree rettype = TREE_TYPE (TREE_TYPE (current_function_decl));
+   int firstreg = VOID_TYPE_P (rettype) ? RVM_R0 : RVM_R2;
+   uint64_t mask = 1ULL << RVM_FP;
+   for (int regno = firstreg; regno < RVM_FP; regno++)
+-    if (df_regs_ever_live_p (regno))
++    if (df_regs_ever_live_p (regno) && (written & (1ULL << regno)))
+       mask |= 1ULL << regno;
++  if (reload_completed)
++    {
++      cfun->machine->frame_save_mask = mask;
++      cfun->machine->frame_save_mask_valid = true;
++    }
+   return mask;
+ }
+ 

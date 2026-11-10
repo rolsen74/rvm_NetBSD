@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 
@@ -23,8 +24,28 @@ with tempfile.TemporaryDirectory(prefix='rvm-normal-tools-') as temporary:
     work = Path(temporary)
     (work/'a.c').write_text('''
 long common __attribute__((common));
-long common_read(void) { return common; }
+static volatile long zero_a, zero_b;
+volatile long *volatile global_pointer __attribute__((section(".data"))) = 0;
+volatile long *volatile global_zero;
+static volatile long *volatile zero_pointer = &zero_a;
+long common_read(void) {
+    if (zero_a != 0 || zero_b != 0) return -1;
+    zero_a = 11; zero_b = 23;
+    int ok = zero_a == 11 && zero_b == 23;
+    zero_pointer = &zero_b;
+    *zero_pointer = 24;
+    ok = ok && zero_b == 24;
+    zero_pointer = &zero_a;
+    *zero_pointer = 12;
+    ok = ok && zero_a == 12;
+    global_pointer = &zero_a;
+    global_zero = &zero_b;
+    ok = ok && *global_pointer == 12 && *global_zero == 24;
+    zero_a = 0; zero_b = 0;
+    return ok ? common : -1;
+}
 static long local = 17;
+long * const probe_a __attribute__((section("link_set_probe"))) = &local;
 static const long * const pointers[] = { &local };
 static long other = 31;
 static const long *volatile current = &other;
@@ -39,6 +60,7 @@ __attribute__((weak)) int choose(void) { return 5; }
 extern long common;
 void common_set(void) { common = 42; }
 static long local = 29;
+long * const probe_b __attribute__((section("link_set_probe"))) = &local;
 long b(void) { return local; }
 int later_base(void) { return 43; }
 int later_alias(void) __attribute__((weak,alias("later_base")));
@@ -56,11 +78,20 @@ extern int later_alias(void);
 extern int first_same(void), second_same(void);
 extern unsigned long stack_address(void);
 extern void emit(int);
+volatile long initialized_scalar = 41;
 char test_stack[65536] __attribute__((aligned(65536)));
+extern long * const __start_link_set_probe[], * const __stop_link_set_probe[];
 int check(void) {
     const char *s;
+    int zero = common_read() == 0 && test_stack[0] == 0 && test_stack[65535] == 0;
+    zero = zero && initialized_scalar == 41;
+    test_stack[0] = 1;
+    test_stack[65535] = 2;
     common_set();
-    int ok = common_read() == 42 && a() == 17 && b() == 29 && !(stack_address() & 65535);
+    int ok = zero && common_read() == 42 && a() == 17 && b() == 29 && !(stack_address() & 65535);
+    ok = ok && test_stack[0] == 1 && test_stack[65535] == 2;
+    ok = ok && __stop_link_set_probe - __start_link_set_probe == 2;
+    ok = ok && *__start_link_set_probe[0] + *__start_link_set_probe[1] == 46;
     ok = ok && later_alias() == 43;
     ok = ok && first_same() == 11 && second_same() == 13;
 #if STRONG
@@ -101,6 +132,7 @@ stack_address:
 ''')
     def compile(source, target, strong=False):
         subprocess.run([str(stand/'kernel_cc.py'), '-O2', '-ffreestanding',
+                        '-DRVM_KERNEL',
                         '-fno-builtin', '-fno-pic', '-fno-pie', '-nostdinc'] +
                        (['-DSTRONG=1'] if strong else []) +
                        ['-c', source, '-o', target], cwd=work, env=env, check=True)
@@ -146,6 +178,15 @@ stack_address:
                         '--ar', args.cross+'ar', '-o', 'netbsd.fhr', 'entry.o',
                         'first/same.o', 'second/same.o'] + objects,
                        cwd=work, env=env, check=True, stdout=subprocess.DEVNULL)
+        mapping = (work/'netbsd.fhr.map').read_text()
+        sections = re.findall(r'^(\.\S+)\s+0x[0-9a-f]+\s+0x[0-9a-f]+', mapping, re.M)
+        assert sections == ['.text', '.data', '.rodata', '.bss'], sections
+        assert re.search(r'^\.bss\s+0x[0-9a-f]+\s+0x[1-9a-f][0-9a-f]{4,}', mapping, re.M), mapping
+        executable = (work/'netbsd.fhr').read_bytes()
+        assert int.from_bytes(executable[14:16], 'big') == 4
+        headers = [struct.unpack_from('>QHH', executable, 16 + 12*i) for i in range(4)]
+        assert [flags for size, alignment, flags in headers] == [4, 3, 2, 3], headers
+        assert executable[-8:] == b'BSS\0END\0', 'BSS must have no stored zero payload'
         try:
             result = subprocess.run([args.vmemu, '-c', 'vm.config'], cwd=work,
                                     env=env, capture_output=True, timeout=2)
