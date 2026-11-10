@@ -1,0 +1,60 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -791,13 +791,13 @@
+   return (size + 3) & ~HOST_WIDE_INT (3);
+ }
+ 
+-/* A leaf with no locals, outgoing area or saved registers needs no PUSHF.
+-   Keep the requested frame pointer and all frames that actually use R62.  */
++/* Without saved GPRs or a required frame pointer, PUSHF/POPF can be
++   omitted even when fixed stack space is needed for locals or caller homes.
++   Dynamic stack allocation still needs the hardware frame for restoration. */
+ static bool
+-rvm_frameless_p (void)
+-{
+-  return crtl->is_leaf && !frame_pointer_needed && !cfun->calls_alloca
+-    && rvm_frame_alloc_size () == 0
++rvm_omit_pushf_p (void)
++{
++  return !frame_pointer_needed && !cfun->calls_alloca
+     && rvm_frame_save_mask () == (1ULL << RVM_FP)
+     && !df_regs_ever_live_p (RVM_FP);
+ }
+@@ -805,9 +805,8 @@
+ void
+ rvm_expand_prologue (void)
+ {
+-  if (rvm_frameless_p ())
+-    return;
+-  emit_insn (gen_pushf (GEN_INT (rvm_frame_save_mask ())));
++  if (!rvm_omit_pushf_p ())
++    emit_insn (gen_pushf (GEN_INT (rvm_frame_save_mask ())));
+   HOST_WIDE_INT size = rvm_frame_alloc_size ();
+   if (size != 0)
+     emit_insn (gen_subdi3 (stack_pointer_rtx, stack_pointer_rtx,
+@@ -817,8 +816,15 @@
+ void
+ rvm_expand_epilogue (void)
+ {
+-  if (!rvm_frameless_p ())
++  if (!rvm_omit_pushf_p ())
+     emit_insn (gen_popf ());
++  else
++    {
++      HOST_WIDE_INT size = rvm_frame_alloc_size ();
++      if (size != 0)
++        emit_insn (gen_adddi3 (stack_pointer_rtx, stack_pointer_rtx,
++                              GEN_INT (size)));
++    }
+   emit_jump_insn (gen_return ());
+ }
+ 
+@@ -826,7 +832,7 @@
+ rvm_initial_elimination_offset (int from, int to)
+ {
+   HOST_WIDE_INT size = rvm_frame_alloc_size ();
+-  HOST_WIDE_INT saved = rvm_frameless_p () ? 0
++  HOST_WIDE_INT saved = rvm_omit_pushf_p () ? 0
+     : 8 * (1 + popcount_hwi (rvm_frame_save_mask ()));
+   /* Locals lie immediately below PUSHF, outgoing arguments below locals.
+      The argument pointer addresses the caller's 64-byte register homes,

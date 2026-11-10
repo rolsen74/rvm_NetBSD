@@ -30,15 +30,43 @@ with tempfile.TemporaryDirectory(prefix='rvm-gcc-opts-') as directory:
     work = Path(directory)
     source = Path(__file__).with_suffix('.c')
     checks = ['if (leaf() != -1 || zeros() != 0) return 1;',
+              'if (flag_builtin_checks() != 0) return 31;',
+              'if (wide_return_checks() != 0 || wide_scratch_probe() != 0) return 44;',
+              'if (regcall_eight(1,2,3,4,5,6,7,8) != 204 || regcall_oldstyle(1,2,3,4,5,6,7,8) != 204) return 37;',
+              'if (regcall_address(37) != (37UL ^ 0x123456789abcdef0UL) || call_unprototyped() != (37UL ^ 0x123456789abcdef0UL)) return 38;',
+              'if (regcall_indirect(regcall_inc, 99) != 100 || !regcall_narrow(1,-7,240,-1234,60000,-300000,4000000000U,-0x123456789L)) return 39;',
               'if (stack_args(1,2,3,4,5,6,7,8,9,10) != 55) return 2;',
               'if (read_args(4, 9) != 13 || saved_register_probe() != 0) return 16;',
+              'if (call_with_home(0) != 37 || call_only() != 37 || stack_only(0xfeedface12345678UL) != 0xfeedface12345678UL) return 29;',
+              'if (stacked_after_call(1,2,3,4,5,6,7,8,9) != 9) return 30;',
               'v = 17; mask_add(&v, 12); if (v != 29 || guard_result != 37) return 17;',
               'if (mask_cas(&v, 28, 41) != 29 || v != 29) return 18;',
               'if (mask_cas(&v, 29, 41) != 29 || v != 41 || guard_result != 37) return 19;']
-    values = [0, 1, 2, 255, 256, 257, 511, 512, 0x7fffffff, 0x80000000,
+    checks += ['unsigned long pair_a[2], pair_b[2];',
+               'if (return_scratch_probe() != 0 || return_live(7,11) != 55) return 40;',
+               'unsigned long stacked_result; regcall_void_stacked(&stacked_result,1,2,3,4,5,6,7,8,9); if (stacked_result != 285) return 43;']
+    pair_values = [0, 1, 65535, 0x7fffffffffffffff, 0x8000000000000000, 0xffffffffffffffff]
+    for i, x in enumerate(pair_values):
+        for j, y in enumerate(pair_values):
+            for a, b in [((x, y), (y, x)), ((x, y), (x, x)), ((x, y), (x, y))]:
+                expected = (a > b) - (a < b)
+                checks += [f'pair_a[0]={literal(a[0])}; pair_a[1]={literal(a[1])}; pair_b[0]={literal(b[0])}; pair_b[1]={literal(b[1])};',
+                           f'if (return_pair_compare(0,pair_a,pair_b) != {expected}) return 41;']
+    for value in [-2147483648,-8,-7,-1,0,1,7,8,2147483647]:
+        expected = 1 if value > 7 else -1 if value < -7 else 0
+        checks.append(f'if (return_sign({value}) != {expected}) return 42;')
+    values = [0, 1, 2, 127, 128, 255, 256, 257, 511, 512, 32767, 32768, 65535, 65536, 0x7fffffff, 0x80000000,
               0xffffffff, 0x100000000, 0xfeedface00000000, 0xffffffffffffffff]
     for x in values:
         low = x & 0xffffffff
+        signed8 = (x & 255) - (256 if x & 128 else 0)
+        signed16 = (x & 65535) - (65536 if x & 32768 else 0)
+        checks += [f'if (cast_u8({literal(x)}) != {literal(x & 255)} || cast_u8_chain({literal(x)}) != {literal(x & 255)}) return 32;',
+                   f'if (cast_u16({literal(x)}) != {literal(x & 65535)} || cast_u16_chain({literal(x)}) != {literal(x & 65535)}) return 33;',
+                   f'if (cast_s8({literal(x)}) != (long){literal(signed8)} || cast_s16({literal(x)}) != (long){literal(signed16)}) return 34;',
+                   f'if (cast_s16_u32({literal(x)}) != {literal(signed16 & 0xffffffff)} || cast_s8_u16({literal(x)}) != {literal(signed8 & 65535)}) return 35;',
+                   f'c = (unsigned char){literal(x)}; h = (unsigned short){literal(x)};',
+                   f'if (load_s8((signed char *)&c) != (long){literal(signed8)} || load_s16((short *)&h) != (long){literal(signed16)}) return 36;']
         signed = low if low < 0x80000000 else low - (1 << 32)
         checks += [f'x = {literal(x)}; u = (unsigned)x; s = (int)x; c = x; h = x;',
                    f'if (dirty_mask(x) != {11 if low & 511 else 17}) return 3;',
@@ -81,12 +109,18 @@ with tempfile.TemporaryDirectory(prefix='rvm-gcc-opts-') as directory:
 extern int dirty_mask(unsigned long), dirty_mask2(unsigned long);
 extern void emit(int);
 extern int saved_register_probe(void);
+extern int return_scratch_probe(void);
+extern int wide_scratch_probe(void);
+extern int wide_return_checks(void);
+unsigned long wide_scratch_slot[2] __attribute__((aligned(16)));
+unsigned long return_scratch_slot;
 extern int frame_abi_checks(void);
 char test_stack[65536] __attribute__((aligned(65536)));
 int yes(unsigned x) { (void)x; return 11; }
 int no(unsigned x) { (void)x; return 17; }
 static volatile int current;
 static volatile unsigned long guard_result;
+unsigned long frame_plain_callee(void) { return 37; }
 unsigned long irq_enter(void) { return 37; }
 void irq_leave(unsigned long value) { guard_result = value; }
 void *memcpy(void *to, const void *from, unsigned long length) {
@@ -97,6 +131,14 @@ void *memcpy(void *to, const void *from, unsigned long length) {
 }
 int getvalue(void) { return current; }
 unsigned long sink(unsigned long a, unsigned long b, unsigned long c) { return a | b | c; }
+int flag_builtin_checks(void);
+unsigned long regcall_eight(unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long);
+unsigned long regcall_oldstyle(unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long);
+unsigned long regcall_address(unsigned long);
+unsigned long regcall_inc(unsigned long);
+unsigned long regcall_indirect(unsigned long (*)(unsigned long), unsigned long);
+int regcall_narrow(_Bool,signed char,unsigned char,short,unsigned short,int,unsigned,long);
+void regcall_void_stacked(unsigned long *,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long,unsigned long);
 int check(void) {
     int abi = frame_abi_checks();
     if (abi) return 20 + abi;
@@ -162,6 +204,65 @@ saved_register_probe:
  add.q #64,r63
  popm r21/r37
  rts
+ xdef return_scratch_probe
+ xref return_scratch
+ xref return_scratch_slot
+return_scratch_probe:
+ pushm r2-r4
+ lea return_scratch_slot,r2
+ move.q #7,r3
+ move.q #3,r4
+ move.q #0xfedcba9876543210,r0
+ jsr return_scratch
+ cmp.q #0xfedcba9876543210,r0
+ bne .Lreturn_bad
+ cmp.q #11,return_scratch_slot
+ bne .Lreturn_bad
+ rclr.l r0
+ jmp .Lreturn_done
+.Lreturn_bad:
+ move.l #1,r0
+.Lreturn_done:
+ popm r2-r4
+ rts
+ xdef wide_scratch_probe
+ xref wide_store
+ xref wide_scratch_slot
+wide_scratch_probe:
+ pushm r2-r4
+ lea wide_scratch_slot,r2
+ move.q #0x123456789abcdef0,r3
+ move.q #0xfedcba9876543210,r4
+ move.q #0xdeadbeefcafebabe,r0
+ move.q #0x0123456789abcdef,r1
+ jsr wide_store
+ cmp.q #0xdeadbeefcafebabe,r0
+ bne .Lwide_bad
+ cmp.q #0x0123456789abcdef,r1
+ bne .Lwide_bad
+ cmp.q #0x123456789abcdef0,(r2)
+ bne .Lwide_bad
+ cmp.q #0xfedcba9876543210,(8,r2)
+ bne .Lwide_bad
+ rclr.l r0
+ jmp .Lwide_done
+.Lwide_bad:
+ move.l #1,r0
+.Lwide_done:
+ popm r2-r4
+ rts
+ xdef frame_home_callee
+frame_home_callee:
+ clr.q (8,r63)
+ clr.q (16,r63)
+ clr.q (24,r63)
+ clr.q (32,r63)
+ clr.q (40,r63)
+ clr.q (48,r63)
+ clr.q (56,r63)
+ clr.q (64,r63)
+ move.q #37,r0
+ rts
 ''')
     subprocess.run(['VMAsm', '-i', 'entry.vma', '-o', 'entry.o', '--obj'],
                    cwd=work, check=True, stdout=subprocess.DEVNULL)
@@ -171,11 +272,24 @@ saved_register_probe:
                          ('-O2', ['-fno-omit-frame-pointer'])]:
         extra = ['-B' + str(args.compiler_dir.resolve()) + '/'] if args.compiler_dir else []
         for src, obj in [(source, 'functions.o'), (source.with_name('gcc_frame_abi.c'), 'frames.o'),
+                         (source.with_name('gcc_flags.c'), 'flags.o'),
+                         (source.with_name('gcc_regcall_abi.c'), 'regcalls.o'),
+                         (source.with_name('gcc_wide_return.c'), 'wide.o'),
                          (work/'driver.c', 'driver.o')]:
             subprocess.run(['python3', str(STAND/'kernel_cc.py'), level,
                             '-ffreestanding', '-fno-builtin', '-nostdinc'] + extra + frame +
                            ['-c', str(src), '-o', str(work/obj)], env=env, check=True)
         assembly = (work/'functions.raw.s').read_text()
+        if not args.baseline:
+            flags_assembly = (work/'flags.raw.s').read_text()
+            write_only = flags_assembly.split('flag_write_only:\n', 1)[1].split('\n\t.size', 1)[0]
+            assert 'mfctrl' not in write_only, write_only
+            for flag in ('c', 'v', 'z', 'n', 'x', 'i'):
+                assert re.search(r'\bset'+flag+r'\b', write_only), write_only
+                assert re.search(r'\bclr'+flag+r'\b', write_only), write_only
+            snapshot = flags_assembly.split('flag_snapshot:\n', 1)[1].split('\n\t.size', 1)[0]
+            assert re.search(r'\bsetx\s*\n\s*mfctrl\s+sr,', snapshot), snapshot
+            assert re.search(r'\bclrs\b', flags_assembly), flags_assembly
         def body(name):
             return assembly.split(name+':\n', 1)[1].split('\n\t.size', 1)[0]
         if not args.baseline and level != '-O0':
@@ -191,6 +305,22 @@ saved_register_probe:
             assert 2 in saved('mask_cas') and not {3, 4} & saved('mask_cas'), body('mask_cas')
             assert saved('mask_asm') == {21, 37, 62}, body('mask_asm')
             assert not {2, 3} & saved('read_args'), body('read_args')
+            for name, size in [('call_with_home', 64), ('stack_only', 8), ('stacked_after_call', 64)]:
+                text = body(name)
+                assert ('pushf' in text) == bool(frame), text
+                assert ('popf' in text) == bool(frame), text
+                assert re.search(r'\b(?:v)?sub\.q\s+#'+str(size)+r',sp(?:,sp)?', text), text
+                restores = re.search(r'\b(?:v)?add\.q\s+#'+str(size)+r',sp(?:,sp)?', text)
+                assert bool(restores) == (not frame), text
+            assert not re.search(r'\b(?:v)?(?:add|sub)\.q[^\n]*sp', body('read_args')), body('read_args')
+            assert ('pushf' in body('call_only')) == bool(frame), body('call_only')
+            assert ('popf' in body('call_only')) == bool(frame), body('call_only')
+            assert not re.search(r'\b(?:v)?(?:add|sub)\.q[^\n]*sp', body('call_only')), body('call_only')
+            assert re.search(r'\b(?:v)?sub\.q\s+#64,sp', body('call_unprototyped')), body('call_unprototyped')
+            regcalls = (work/'regcalls.raw.s').read_text()
+            for name in ('regcall_address', 'regcall_indirect'):
+                text = regcalls.split(name+':\n', 1)[1].split('\n\t.size', 1)[0]
+                assert not re.search(r'\b(?:v)?sub\.q\s+#64,sp', text), text
             assert ('pushf' in body('leaf')) == bool(frame), body('leaf')
             assert ('popf' in body('leaf')) == bool(frame), body('leaf')
             for name, size, sign in [('divides', 'q', 's'), ('udivides', 'q', 'u'),
@@ -205,9 +335,24 @@ saved_register_probe:
             assert body('zeros').count('rclr.q') >= 3, body('zeros')
             assert body('limit').count('#256') == 2, body('limit')
             assert 'extu.l' in body('wide'), body('wide')
+            text = body('return_pair_compare')
+            assert re.search(r'\bvmove\.l\s+#-1,r0', text), text
+            assert re.search(r'\bvmove\.l\s+#1,r0', text), text
+            assert not re.search(r'\brmove\.l\s+r[1-9][0-9]*,r0', text), text
+            assert not re.search(r'\brclr\.l\s+r(?:[1-9][0-9]*)\b', text), text
+            assert ('pushf' in body('return_sign')) == bool(frame), body('return_sign')
+            assert 0 in saved('return_scratch'), body('return_scratch')
+            for name, opcode in [('cast_u8', 'rextu.b'), ('cast_u16', 'rextu.w'),
+                                 ('cast_u8_chain', 'rextu.b'), ('cast_u16_chain', 'rextu.w'),
+                                 ('cast_s8', 'rexts.b'), ('cast_s16', 'rexts.w'),
+                                 ('wide8', 'extu.b'), ('wide16', 'extu.w'),
+                                 ('load_s8', 'exts.b'), ('load_s16', 'exts.w')]:
+                text = body(name)
+                assert opcode in text, text
+                assert len(re.findall(r'\b(?:r)?ext[su]\.[bwl]\b', text)) == 1, text
         subprocess.run(['python3', str(STAND/'kernel_link.py'), '--cc', env['RVM_REAL_CC'],
                         '--ld', args.cross+'ld', '--nm', args.cross+'nm', '--ar', args.cross+'ar',
-                        '-o', 'netbsd.fhr', 'entry.o', 'functions.o', 'frames.o', 'driver.o'],
+                        '-o', 'netbsd.fhr', 'entry.o', 'functions.o', 'frames.o', 'flags.o', 'regcalls.o', 'wide.o', 'driver.o'],
                        cwd=work, env=env, check=True, stdout=subprocess.DEVNULL)
         try:
             result = subprocess.run([args.vmemu, '-c', 'vm.config'], cwd=work,

@@ -1,0 +1,92 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -836,12 +836,61 @@
+   HOST_WIDE_INT saved = rvm_omit_pushf_p () ? 0
+     : 8 * (1 + popcount_hwi (rvm_frame_save_mask ()));
+   /* Locals lie immediately below PUSHF, outgoing arguments below locals.
+-     The argument pointer addresses the caller's 64-byte register homes,
++     The argument pointer addresses the caller's argument area,
+      immediately above JSR's eight-byte return address. */
+   if (from == ARG_POINTER_REGNUM)
+     return (to == STACK_POINTER_REGNUM ? size : 0) + saved + 8;
+   if (to == STACK_POINTER_REGNUM)
+     return size;
++  return 0;
++}
++
++/* Fixed, scalar signatures that fit in R2-R9 need no caller register
++   homes. GCC spills address-taken parameters into the callee's own frame.
++   Keep the established home/stack layout for varargs, stacked arguments,
++   aggregates and calls without a complete signature. DECL_OR_TYPE is a
++   FUNCTION_DECL for direct calls/definitions and a FUNCTION_TYPE for
++   indirect calls. Library-call expansion may pass NULL_TREE. */
++int
++rvm_reg_parm_stack_space (tree decl_or_type)
++{
++  if (!decl_or_type)
++    return 8 * UNITS_PER_WORD;
++  tree decl = TREE_CODE (decl_or_type) == FUNCTION_DECL ? decl_or_type : NULL_TREE;
++  tree type = decl ? TREE_TYPE (decl) : decl_or_type;
++  if (TREE_CODE (type) != FUNCTION_TYPE || stdarg_p (type))
++    return 8 * UNITS_PER_WORD;
++  tree result = TREE_TYPE (type);
++  if (AGGREGATE_TYPE_P (result) || TREE_CODE (result) == COMPLEX_TYPE
++      || (result != void_type_node && int_size_in_bytes (result) > UNITS_PER_WORD))
++    return 8 * UNITS_PER_WORD;
++
++  unsigned slots = 0;
++  tree args = TYPE_ARG_TYPES (type);
++  if (!args)
++    {
++      /* An old-style definition still has its declared parameters. An
++         unprototyped call must conservatively retain the old call area. */
++      if (decl != current_function_decl)
++        return 8 * UNITS_PER_WORD;
++      for (tree arg = DECL_ARGUMENTS (decl); arg; arg = DECL_CHAIN (arg))
++        {
++          tree param = TREE_TYPE (arg);
++          HOST_WIDE_INT size = int_size_in_bytes (param);
++          if (AGGREGATE_TYPE_P (param) || TREE_CODE (param) == COMPLEX_TYPE
++              || size <= 0 || size > UNITS_PER_WORD || ++slots > 8)
++            return 8 * UNITS_PER_WORD;
++        }
++    }
++  else
++    for (; args && args != void_list_node; args = TREE_CHAIN (args))
++      {
++        tree param = TREE_VALUE (args);
++        HOST_WIDE_INT size = int_size_in_bytes (param);
++        if (AGGREGATE_TYPE_P (param) || TREE_CODE (param) == COMPLEX_TYPE
++            || size <= 0 || size > UNITS_PER_WORD || ++slots > 8)
++          return 8 * UNITS_PER_WORD;
++      }
+   return 0;
+ }
+ 
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -315,7 +315,7 @@
+ 
+ /* Define this if it is the responsibility of the caller to allocate
+    the area reserved for arguments passed in registers.  */
+-#define REG_PARM_STACK_SPACE(FNDECL) (8 * UNITS_PER_WORD)
++#define REG_PARM_STACK_SPACE(FNDECL) rvm_reg_parm_stack_space (FNDECL)
+ 
+ /* Offset from the argument pointer register to the first argument's
+    address.  On some machines it may depend on the data type of the
+@@ -500,6 +500,7 @@
+     builtin_define_std ("rvm");			\
+     builtin_define_std ("RVM");			\
+     builtin_define ("__RVM_CALLER_ARG_HOME__=64"); \
++    builtin_define ("__RVM_REGISTER_CALL_ABI__=2"); \
+     builtin_define ("__RVM_FLAG_BUILTINS__=1"); \
+     if (TARGET_FPU) { builtin_define ("__RVM_FPU__=1"); builtin_define ("__RVM_FPU_GPR_ABI__=1"); } \
+     builtin_define ("__RVM_BIG_ENDIAN__");		\
+--- a/gcc/config/rvm/rvm-protos.h
++++ b/gcc/config/rvm/rvm-protos.h
+@@ -31,3 +31,5 @@
+ 
+ extern int rvm_bit_index (rtx, machine_mode, bool);
+ extern int rvm_low_clear_size (rtx, machine_mode);
++
++extern int rvm_reg_parm_stack_space (tree);

@@ -273,8 +273,8 @@ $(OBJDIR)/locore.o: $(RVM_DIR)/rvm/locore.S $(HEADERS) $(RVM_DIR)/Makefile.boots
 	$(RVM_CC) -nostdinc $(HEADER_FLAGS) -E -P -x assembler-with-cpp "$<" -o "$(OBJDIR)/locore.vma"
 	$(VMASM) -i "$(OBJDIR)/locore.vma" -o "$@" --obj
 
-$(OBJDIR)/netbsd.fhr: $(BOOT_OBJS) $(RVM_DIR)/Makefile.bootstrap
-	$(RVM_LD) -e _start -Map "$(OBJDIR)/netbsd.map" -o "$@" $(BOOT_OBJS)
+$(OBJDIR)/netbsd.fhr: $(BOOT_OBJS) $(RVM_DIR)/Makefile.bootstrap $(RVM_DIR)/stand/sections.ld
+	$(RVM_LD) -T "$(RVM_DIR)/stand/sections.ld" -e _start -Map "$(OBJDIR)/netbsd.map" -o "$@" $(BOOT_OBJS)
 
 $(OBJDIR)/netbsd.fhr: | check
 

@@ -1,7 +1,10 @@
 /* Assembly callers reserve the homes advertised by the compiler's ABI. */
 #ifndef _RVM_ASM_H_
 #define _RVM_ASM_H_
-#ifdef __RVM_CALLER_ARG_HOME__
+#ifdef __RVM_REGISTER_CALL_ABI__
+/* These assembly-to-C calls have fixed scalar signatures fitting R2-R9. */
+#define RVM_C_CALL_HOME 0
+#elif defined(__RVM_CALLER_ARG_HOME__)
 #define RVM_C_CALL_HOME __RVM_CALLER_ARG_HOME__
 #else
 #define RVM_C_CALL_HOME 0

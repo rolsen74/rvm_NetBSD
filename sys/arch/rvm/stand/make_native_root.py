@@ -25,11 +25,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--objdir', type=Path, required=True)
     parser.add_argument('--kernel-objdir', type=Path, required=True)
+    parser.add_argument('--output-dir', type=Path,
+                        help='write the rebuilt image here instead of objdir/native-root')
     parser.add_argument('--master-passwd', type=Path,
                         help='guest master.passwd input; defaults to a locked root account')
     args = parser.parse_args()
     obj, kernel = args.objdir.resolve(), args.kernel_objdir.resolve()
-    output = obj/'native-root'
+    output = args.output_dir.resolve() if args.output_dir else obj/'native-root'
     output.mkdir(exist_ok=True)
     for source in PROGRAMS.values():
         if not (obj/source).is_file():

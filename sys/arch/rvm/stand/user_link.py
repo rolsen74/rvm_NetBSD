@@ -91,7 +91,8 @@ def link(args):
     selected = list(roots)
     available = list(archives)
     generated = set.union(set(), *(obj.definitions for obj in symbols(args, args.end.resolve()))) | {'__rvm_run_init', '__rvm_run_preinit',
-                 '__rvm_run_constructors', '__rvm_run_fini', '__rvm_register_fini'}
+                 '__rvm_run_constructors', '__rvm_run_fini', '__rvm_register_fini',
+                 '__rvm_data_base', '__rvm_rodata_base', '__rvm_bss_base'}
     while True:
         definitions = set.union(generated, *(obj.definitions for obj in selected))
         required = set.union(set(), *(obj.required for obj in selected)) - definitions
@@ -166,7 +167,8 @@ def link(args):
         args.output.parent.mkdir(parents=True, exist_ok=True)
         executable = work/'program.fhr'
         mapfile = work/'program.map'
-        subprocess.run([args.ld, '-e', '_start', '-Map', str(mapfile),
+        subprocess.run([args.ld, '-T', str(Path(__file__).with_name('sections.ld')),
+                        '-e', '_start', '-Map', str(mapfile),
                         '-o', str(executable)] + list(map(str, objects)) +
                        [str(target), str(args.end)], check=True)
         if not executable.exists() or executable.read_bytes()[:4] != b'FHR\0':

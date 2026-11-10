@@ -5,6 +5,9 @@
 #include <machine/cache.h>
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         xdef rvm_user_resume
         xref rvm_fpu_restore
 rvm_user_resume:
@@ -15,9 +18,13 @@ rvm_user_resume:
         move.q (RVM_TF_ROOT,r2),r0
         mtctrl r0,mut
         add.q #RVM_TF_FP,r2
+#if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_fpu_restore
+#if RVM_C_CALL_HOME
         add.q #RVM_C_CALL_HOME,r63
+#endif
         sub.q #RVM_TF_FP,r2
         move.q r2,r63
         sub.q #528,r63
@@ -45,9 +52,17 @@ rvm_user_resume:
         xref rvm_user_exception
 rvm_user_exception_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q r63,r2
+#if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_user_exception
+#if RVM_C_CALL_HOME
         add.q #RVM_C_CALL_HOME,r63
+#endif
         popm r0-r62
         rte

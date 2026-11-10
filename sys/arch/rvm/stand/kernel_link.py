@@ -40,7 +40,7 @@ def section_script(link_sets, storage):
     """Merge runtime tables while retaining each NetBSD linker-set range."""
     lines = ['SECTIONS {', '. = 0;',
              '.text : { *(.text .text.*) }',
-             '.data : {',
+             '.data : { __rvm_data_base = .;',
              '*(EXCLUDE_FILE (' + ' '.join(json.dumps(str(p) + '*') for p in storage) +
              ') .data .data.*)' if storage else '*(.data .data.*)']
     for name in sorted(link_sets):
@@ -48,13 +48,13 @@ def section_script(link_sets, storage):
                   f'KEEP(*({name}))', f'__stop_{name} = .;']
     # FHR GAS retains quotes in the version note's input section name.
     lines += ['*(link_set_*)',
-              '*(.note.netbsd.ident ?.note.netbsd.ident?)', '}',
-              '.rodata : { *(.rodata .rodata.*) }',
-              '.bss (NOLOAD) : {']
+              '*(.note.netbsd.ident ?.note.netbsd.ident?)', '. += 8;', '}',
+              '.rodata : { __rvm_rodata_base = .; *(.rodata .rodata.*) . += 8; }',
+              '.bss (NOLOAD) : { __rvm_bss_base = .;']
     for path in storage:
         # A filename wildcard prevents implicit loading ahead of _start.
         lines.append(f'{json.dumps(str(path) + "*")}(.data)')
-    lines += ['*(.rvm.bss .bss .bss.*) *(COMMON)', '}', '}']
+    lines += ['*(.rvm.bss .bss .bss.*) *(COMMON)', '. += 8;', '}', '}']
     return '\n'.join(lines) + '\n'
 
 

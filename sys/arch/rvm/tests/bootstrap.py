@@ -120,7 +120,8 @@ def main():
                 subprocess.run([args.vmasm, '-i', str(work / 'probe.vma'),
                                 '-o', str(work / 'probe.o'), '--obj'], check=True, stdout=subprocess.DEVNULL)
                 objects.append(work / 'probe.o')
-            subprocess.run([args.cross + 'ld', '-e', '_start', '-o', str(work / 'netbsd.fhr')]
+            subprocess.run([args.cross + 'ld', '-T', str(root / 'sys/arch/rvm/stand/sections.ld'),
+                            '-e', '_start', '-o', str(work / 'netbsd.fhr')]
                            + [str(path) for path in objects], check=True)
             configure(work, 256)
 

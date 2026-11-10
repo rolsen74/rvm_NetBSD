@@ -4,12 +4,13 @@
 #include <machine/psl.h>
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         xdef rvm_intr_disable
 rvm_intr_disable:
         mfctrl cr,r0
-        move.q r0,r1
-        and.q #0xfffffffffffffffb,r1
-        mtctrl r1,cr
+        clri
         rts
         xdef rvm_check_mode
         xref rvm_bad_mode
@@ -33,6 +34,10 @@ rvm_irq_set_sr:
         xref rvm_async_irq_return
 rvm_async_interrupt_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         mfctrl cr,r0
         pushm r0
         mfctrl inte,r0

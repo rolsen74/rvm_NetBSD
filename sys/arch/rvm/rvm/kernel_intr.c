@@ -69,13 +69,13 @@ rvm_intr_suspend(void)
 void
 rvm_intr_apply(void)
 {
-	uint64_t cr = rvm_intr_disable();
+	rvm_intr_disable();
 	struct cpu_info *ci = curcpu();
 
 	if (ci->ci_cpl < IPL_SCHED && ci->ci_intr_depth == 0 &&
 	    ci->ci_mtx_count == 0 &&
 	    (curlwp == NULL || curlwp->l_md.md_irq_hold == 0))
-		rvm_irq_set_cr(cr | RVM_CR_INTERRUPT);
+		__builtin_rvm_seti();
 }
 
 void

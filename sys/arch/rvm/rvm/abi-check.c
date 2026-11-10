@@ -47,7 +47,9 @@ CHECK_SIZE(register_t, 8);
 CHECK_SIZE(paddr_t, 8);
 CHECK_SIZE(vaddr_t, 8);
 CHECK_SIZE(struct reg, 66 * 8);
-CHECK_SIZE(mcontext_t, sizeof(struct reg));
+CHECK_SIZE(mcontext_t, sizeof(struct reg) + sizeof(struct fpreg));
+_Static_assert(__builtin_offsetof(mcontext_t, __fpregs) == sizeof(struct reg),
+    "floating-point context follows integer context");
 CHECK_SIZE(label_t, 66 * 8);
 CHECK_SIZE(sig_atomic_t, 4);
 _Static_assert((sig_atomic_t)-1 < 0, "signed sig_atomic_t");

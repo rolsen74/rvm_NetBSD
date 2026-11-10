@@ -5,13 +5,22 @@
 
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         xref rvm_early_init
         xref rvm_boot_trap
         xref rvm_boot_stack
         xref rvm_boot_vectors
         xdef  _start
         xdef  rvm_start
+        xdef __rvm_section_bases_v1
+__rvm_section_bases_v1:
 _start:
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
 rvm_start:
         /* Loader enters with caches/MMU off. No stack access before LEA. */
         rclr.q  r0
@@ -44,6 +53,10 @@ rvm_start:
 rvm_boot_exception:
         /* Preserve GPRs before C; fatal only, no RTE/context restoration. */
         pushm   r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q  r63,r2
 #if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
@@ -59,6 +72,10 @@ rvm_boot_exception:
         xref rvm_supervisor_dispatch
 rvm_supervisor_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q r63,r2
 #if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
@@ -75,6 +92,10 @@ rvm_supervisor_entry:
         xref rvm_timer_irq_dispatch
 rvm_timer_interrupt_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         mfctrl cr,r0
         pushm r0
         move.q #8,r0

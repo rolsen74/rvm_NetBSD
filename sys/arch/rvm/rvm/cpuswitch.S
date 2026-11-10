@@ -4,6 +4,9 @@
 #include <machine/switch.h>
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         /* Keep the standard three-argument MI entry. The current compiler
          * gives a bool argument a one-byte stack home without ABI padding;
          * the C body needs only the two LWP pointers (returning is unused).
@@ -43,6 +46,10 @@ rvm_cpu_switch:
         xdef rvm_lwp_trampoline
         xref rvm_cpu_lwp_start
 rvm_lwp_trampoline:
+        /* Fresh switch frames have zeroed GPRs, including the section bases. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q r0,r4
         move.q r10,r2
         move.q r11,r3

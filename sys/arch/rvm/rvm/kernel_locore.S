@@ -5,12 +5,21 @@
 #include <machine/cache.h>
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         xref rvm_early_init
         xref rvm_boot_trap
         xref rvm_boot_stack
         xref rvm_boot_vectors
         xdef _start
+        xdef __rvm_section_bases_v1
+__rvm_section_bases_v1:
 _start:
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         rclr.q r0
         mtctrl r0,cr
         mtctrl r0,inte
@@ -27,13 +36,21 @@ _start:
         bne .Lvectors
         lea rvm_boot_vectors,r10
         mtctrl r10,vbr
+#if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_early_init
         jmp rvm_boot_stop
 rvm_kernel_exception:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q r63,r2
+#if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_boot_trap
         jmp rvm_boot_stop
 
@@ -84,9 +101,7 @@ rvm_icache_invalidate_all:
         xdef rvm_intr_disable
 rvm_intr_disable:
         mfctrl cr,r0
-        move.q r0,r1
-        and.q #0xfffffffffffffffb,r1
-        mtctrl r1,cr
+        clri
         rts
         xdef rvm_irq_set_cr
 rvm_irq_set_cr:
@@ -143,14 +158,22 @@ rvm_emulator_putchar:
         xref rvm_kernel_irq
 rvm_kernel_irq_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         mfctrl cr,r0
         pushm r0
         move.q #RVM_KERNEL_CR,r0
         mtctrl r0,cr
         move.q r63,r2
+#if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_kernel_irq
+#if RVM_C_CALL_HOME
         add.q #RVM_C_CALL_HOME,r63
+#endif
         popm r0
         mtctrl r0,cr
         popm r0-r62

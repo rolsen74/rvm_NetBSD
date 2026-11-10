@@ -4,10 +4,17 @@
 #include <machine/bootcopy.h>
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         xdef rvm_copyfault_entry
         xref rvm_copyfault_dispatch
 rvm_copyfault_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q r63,r2
 #if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63

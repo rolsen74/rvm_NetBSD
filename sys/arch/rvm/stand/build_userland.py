@@ -39,6 +39,11 @@ def main():
     obj, cross = args.objdir.resolve(), args.toolchain.resolve()
     tools = args.tooldir.resolve() if args.tooldir else obj/'hosttools'
     obj.mkdir(parents=True, exist_ok=True)
+    # BSD make uses the source directory if the mapped object directory does
+    # not exist. These two libraries are built before the optional libraries
+    # and programs, whose object directories are created below.
+    for directory in ('lib/libc', 'lib/csu'):
+        (obj/directory).mkdir(parents=True, exist_ok=True)
     cc = cross/'bin/rvm-netbsd-gcc'
     macros = subprocess.check_output([str(cc), '-dM', '-E', '-x', 'c', '-'],
                                       input='', text=True)

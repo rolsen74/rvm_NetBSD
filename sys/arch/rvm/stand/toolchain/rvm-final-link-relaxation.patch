@@ -1,0 +1,589 @@
+--- a/bfd/rvm-fhr.c
++++ b/bfd/rvm-fhr.c
+@@ -87,6 +87,7 @@
+   struct fhr_pcrel_site * PcrelSites;
+   size_t PcrelCount;
+   bool PcrelIndexed;
++  bool RelaxPrepared;
+ 
+ 	struct fhr_header * ExeRelocs;
+ 	int					ExeRelocCount;
+@@ -312,7 +313,8 @@
+ 	isym->sym.the_bfd = abfd;
+ 	isym->sym.name	  = name;
+ 	isym->sym.value	  = value;
+-  if (strncmp (name, FHR_PCREL_MARKER, sizeof (FHR_PCREL_MARKER) - 1) == 0)
++  if (strncmp (name, FHR_PCREL_MARKER, sizeof (FHR_PCREL_MARKER) - 1) == 0
++      || strncmp (name, "__rvm_lr_", 9) == 0)
+     flags = (flags & ~BSF_GLOBAL) | BSF_LOCAL;
+ 	isym->sym.flags	  = flags;
+ 	isym->sym.section = sec;
+@@ -602,6 +604,8 @@
+ {
+ 	bool stat;
+ 
++  if (!bfd_link_relocatable (info) && info->disable_target_specific_optimizations < 0)
++    info->disable_target_specific_optimizations = 1;
+ 	stat = _bfd_generic_link_add_symbols ( abfd, info );
+ 
+ 	// printf ( "fhr_link_add_symbols : stat %d : file=%s using generic path\n", stat,
+@@ -1132,6 +1136,396 @@
+                   sizeof (*data->PcrelSites), fhr_Compare_Pcrel_Sites) != NULL;
+ }
+ 
++/* Input offsets are always mapped from immutable object bytes. Rebuilding
++   rather than deleting in place permits an operand to grow at an alignment
++   boundary, without cumulative addend or symbol-value drift. */
++struct fhr_lr_site {
++  bfd_vma offset, local_target;
++  unsigned int original_width, width, floor;
++  int reloc;
++  bool compact;
++};
++struct fhr_lr_symbol {
++  asymbol *symbol;
++  bfd_vma value, hash_value;
++  struct bfd_link_hash_entry *hash;
++};
++struct fhr_lr_reloc {
++  arelent *reloc;
++  bfd_vma offset, addend;
++  reloc_howto_type *howto;
++};
++struct fhr_lr_state {
++  asection *section;
++  bfd_size_type size;
++  bfd_byte *bytes, *rebuilt;
++  bool safe;
++  size_t site_count, symbol_count, reloc_count;
++  struct fhr_lr_site *sites;
++  struct fhr_lr_symbol *symbols;
++  struct fhr_lr_reloc *relocs;
++};
++
++static bfd_vma
++fhr_lr_read (const bfd_byte *p, unsigned int width)
++{
++  bfd_vma value = 0;
++  while (width--) value = (value << 8) | *p++;
++  return value;
++}
++
++static void
++fhr_lr_write (bfd_byte *p, unsigned int width, bfd_vma value)
++{
++  while (width) { p[--width] = value; value >>= 8; }
++}
++
++static bfd_vma
++fhr_lr_map (struct fhr_lr_state *state, bfd_vma offset)
++{
++  size_t i;
++  bfd_vma removed = 0;
++  if (!state) return offset;
++  for (i = 0; i < state->site_count; ++i)
++    {
++      struct fhr_lr_site *s = state->sites + i;
++      if (offset < s->offset + 3 + s->original_width) break;
++      removed += s->original_width - s->width;
++    }
++  return offset - removed;
++}
++
++static int
++fhr_lr_compare (const void *a, const void *b)
++{
++  bfd_vma x = ((const struct fhr_lr_site *)a)->offset;
++  bfd_vma y = ((const struct fhr_lr_site *)b)->offset;
++  return x < y ? -1 : x != y;
++}
++
++static struct fhr_lr_state *
++fhr_lr_init (asection *sec, struct bfd_link_info *info)
++{
++  struct fhr_lr_state *st = sec->used_by_bfd;
++  struct fhr_data *data = sec->owner->tdata.any;
++  unsigned int versions = 0, ends = 0;
++  bool blocked = false;
++  size_t i, j;
++  if (st) return st;
++  st = bfd_zalloc (sec->owner, sizeof *st);
++  if (!st) return NULL;
++  sec->used_by_bfd = st;
++  st->section = sec; st->size = sec->size;
++  st->symbols = bfd_zalloc (sec->owner, (data->InputSymbolCount + 1) * sizeof *st->symbols);
++  st->sites = bfd_zalloc (sec->owner, (data->InputSymbolCount + 1) * sizeof *st->sites);
++  st->relocs = bfd_zalloc (sec->owner, (sec->reloc_count + 1) * sizeof *st->relocs);
++  if (!st->symbols || !st->sites || !st->relocs) return NULL;
++  if (sec->size && (sec->flags & SEC_HAS_CONTENTS))
++    {
++      st->bytes = bfd_alloc (sec->owner, sec->size);
++      st->rebuilt = bfd_alloc (sec->owner, sec->size);
++      if (!st->bytes || !st->rebuilt
++          || !bfd_get_section_contents (sec->owner, sec, st->bytes, 0, sec->size)) return NULL;
++    }
++  for (i = 0; i < (size_t)data->InputSymbolCount; ++i)
++    {
++      asymbol *sym = data->InputSymbols[i];
++      if (strncmp (sym->name, "__rvm_lr_object_block_", 22) == 0) blocked = true;
++      if (sym->section != sec) continue;
++      struct fhr_lr_symbol *s = st->symbols + st->symbol_count++;
++      s->symbol = sym; s->value = sym->value;
++      if (sym->flags & BSF_GLOBAL)
++        {
++          s->hash = bfd_link_hash_lookup (info->hash, sym->name, false, false, true);
++          if (s->hash && (s->hash->type == bfd_link_hash_defined
++                         || s->hash->type == bfd_link_hash_defweak)
++              && s->hash->u.def.section == sec) s->hash_value = s->hash->u.def.value;
++          else s->hash = NULL;
++        }
++      if (strncmp (sym->name, "__rvm_lr_v1_", 12) == 0)
++        { ++versions; if (sym->value != 0) blocked = true; }
++      if (strncmp (sym->name, "__rvm_lr_end_", 13) == 0)
++        { ++ends; if (sym->value != st->size) blocked = true; }
++      if (strncmp (sym->name, "__rvm_lr_block_", 15) == 0) blocked = true;
++    }
++  for (i = 0; i < sec->reloc_count; ++i)
++    {
++      arelent *r = sec->orelocation[i];
++      struct fhr_lr_reloc *out = st->relocs + st->reloc_count++;
++      out->reloc = r; out->offset = r->address; out->howto = r->howto;
++      out->addend = r->addend;
++      if (st->bytes && !r->howto->pc_relative)
++        {
++          unsigned int width = bfd_get_reloc_size (r->howto);
++          if (r->address > st->size || width > st->size - r->address) return NULL;
++          out->addend += fhr_lr_read (st->bytes + r->address, width);
++        }
++    }
++  st->safe = versions == 1 && ends == 1 && !blocked && st->bytes && (sec->flags & SEC_CODE);
++  if (!st->safe) return st;
++  for (i = 0; i < st->symbol_count; ++i)
++    {
++      struct fhr_lr_symbol *sym = st->symbols + i;
++      bfd_vma at = sym->value;
++      unsigned int mode;
++      if (strncmp (sym->symbol->name, FHR_PCREL_MARKER, sizeof FHR_PCREL_MARKER - 1)) continue;
++      if (at + 4 > st->size) { st->safe = false; break; }
++      mode = st->bytes[at + 2];
++      struct fhr_lr_site *s = st->sites + st->site_count++;
++      s->offset = at; s->reloc = -1;
++      if (mode >= 0x2c && mode <= 0x33)
++        {
++          bfd_vma delta;
++          s->original_width = s->width = mode - 0x2b;
++          if (at + 3 + s->width > st->size) { st->safe = false; break; }
++          delta = fhr_lr_read (st->bytes + at + 3, s->width);
++          if (s->width < 8 && (delta & ((bfd_vma)1 << (s->width * 8 - 1))))
++            delta |= (bfd_vma)-1 << (s->width * 8);
++          s->local_target = at + delta;
++          if (s->local_target > st->size) { st->safe = false; break; }
++        }
++      else if (mode == 0x37)
++        {
++          s->original_width = s->width = 8;
++          for (j = 0; j < st->reloc_count; ++j)
++            if (st->relocs[j].offset == at + 3
++                && st->relocs[j].howto->type == BFD_RELOC_64)
++              { s->reloc = j; break; }
++          if (s->reloc < 0 || at + 11 > st->size) { st->safe = false; break; }
++        }
++      else { st->safe = false; break; }
++    }
++  if (!st->safe) st->site_count = 0;
++  qsort (st->sites, st->site_count, sizeof *st->sites, fhr_lr_compare);
++  return st;
++}
++
++/* Resolve an original input offset, before any byte deletion. Section-symbol
++   addends need the same mapping as named symbols and stored function pointers. */
++static bool
++fhr_lr_target (struct fhr_lr_reloc *r, struct bfd_link_info *info,
++               asection **section, bfd_vma *offset)
++{
++  asymbol *sym = *r->reloc->sym_ptr_ptr;
++  struct bfd_link_hash_entry *h = NULL;
++  struct fhr_lr_state *st;
++  size_t i;
++  if (bfd_is_und_section (sym->section) || bfd_is_com_section (sym->section))
++    {
++      asymbol *local = bfd_is_com_section (sym->section) ? NULL : fhr_Find_Local_Defined_Symbol (sym);
++      if (local) sym = local;
++      else
++        {
++          h = bfd_link_hash_lookup (info->hash, sym->name, false, false, true);
++          if (!h || (h->type != bfd_link_hash_defined && h->type != bfd_link_hash_defweak)) return false;
++        }
++    }
++  *section = h ? h->u.def.section : sym->section;
++  *offset = h ? h->u.def.value : sym->value;
++  if (bfd_is_abs_section (*section) || bfd_is_com_section (*section))
++    { *offset += r->addend; return true; }
++  st = fhr_lr_init (*section, info);
++  if (!st) return false;
++  for (i = 0; i < st->symbol_count; ++i)
++    if (h ? st->symbols[i].hash == h : st->symbols[i].symbol == sym)
++      { *offset = h ? st->symbols[i].hash_value : st->symbols[i].value; break; }
++  *offset += r->addend;
++  return true;
++}
++
++static void
++fhr_lr_protect_offset (struct fhr_lr_state *st, bfd_vma offset)
++{
++  size_t i;
++  if (!st) return;
++  for (i = 0; i < st->site_count; ++i)
++    if (st->sites[i].reloc >= 0 && offset >= st->sites[i].offset + 3
++        && offset < st->sites[i].offset + 3 + st->sites[i].original_width)
++      st->sites[i].floor = 8;
++}
++
++static bool
++fhr_lr_prepare (struct bfd_link_info *info)
++{
++  struct fhr_data *output = info->output_bfd->tdata.any;
++  bfd *input;
++  asection *sec;
++  size_t i;
++  if (output->RelaxPrepared) return true;
++  /* Snapshot every input before changing any global symbol definition. */
++  for (input = info->input_bfds; input; input = input->link.next)
++    for (sec = input->sections; sec; sec = sec->next)
++      if (!fhr_lr_init (sec, info)) return false;
++  for (input = info->input_bfds; input; input = input->link.next)
++    for (sec = input->sections; sec; sec = sec->next)
++      {
++        struct fhr_lr_state *st = sec->used_by_bfd;
++        for (i = 0; i < st->symbol_count; ++i)
++          fhr_lr_protect_offset (st, st->symbols[i].value);
++        for (i = 0; i < st->site_count; ++i)
++          if (st->sites[i].reloc < 0)
++            fhr_lr_protect_offset (st, st->sites[i].local_target);
++        for (i = 0; i < st->reloc_count; ++i)
++          {
++            asection *to;
++            bfd_vma offset;
++            if (st->relocs[i].howto->pc_relative) continue;
++            if (!fhr_lr_target (st->relocs + i, info, &to, &offset)) return false;
++            if (!bfd_is_abs_section (to) && !bfd_is_com_section (to))
++              {
++                struct fhr_lr_state *target = to->used_by_bfd;
++                /* An out-of-section code addend has no interior byte to
++                   map. Preserve that section's original offsets. This also
++                   handles negative addends before its first instruction. */
++                if (target && (to->flags & SEC_CODE) && offset > target->size)
++                  { target->safe = false; target->site_count = 0; }
++                else
++                  fhr_lr_protect_offset (target, offset);
++              }
++          }
++      }
++  output->RelaxPrepared = true;
++  return true;
++}
++
++static bfd_reloc_status_type
++fhr_lr_defer (bfd *abfd ATTRIBUTE_UNUSED, arelent *reloc ATTRIBUTE_UNUSED,
++              asymbol *symbol ATTRIBUTE_UNUSED, void *data ATTRIBUTE_UNUSED,
++              asection *section ATTRIBUTE_UNUSED, bfd *output ATTRIBUTE_UNUSED,
++              char **message ATTRIBUTE_UNUSED)
++{
++  return bfd_reloc_ok;
++}
++static reloc_howto_type fhr_lr_howto = HOWTO (
++  BFD_RELOC_64_PCREL, 0, 8, 64, true, 0, complain_overflow_dont,
++  fhr_lr_defer, "RVM_FHR_COMPACT_PC", false, 0, 0, true);
++
++static bool
++fhr_relax_section (bfd *abfd ATTRIBUTE_UNUSED, asection *sec,
++                   struct bfd_link_info *info, bool *again)
++{
++  struct fhr_lr_state *st;
++  size_t i, j;
++  bool changed = false;
++  bfd_vma source, target, oldsize;
++  *again = false;
++  if (bfd_link_relocatable (info) || info->disable_target_specific_optimizations > 1) return true;
++  if (!fhr_lr_prepare (info)) return false;
++  st = fhr_lr_init (sec, info);
++  if (!st) return false;
++  if (!st->safe || !sec->output_section) return true;
++  for (i = 0; i < st->site_count; ++i)
++    {
++      struct fhr_lr_site *s = st->sites + i;
++      asection *to;
++      bfd_vma at;
++      unsigned int width = 1;
++      bfd_signed_vma delta;
++      if (s->reloc < 0) continue;
++      if (!fhr_lr_target (st->relocs + s->reloc, info, &to, &at)) return false;
++      if (to->output_section != sec->output_section || bfd_is_abs_section (to)
++          || bfd_is_com_section (to)) continue;
++      target = to->output_offset + fhr_lr_map (to->used_by_bfd, at);
++      source = sec->output_offset + fhr_lr_map (st, s->offset);
++      delta = target - source;
++      while (width < 8 && (delta < -((bfd_signed_vma)1 << (8 * width - 1))
++                           || delta > ((bfd_signed_vma)1 << (8 * width - 1)) - 1)) ++width;
++      /* If layout padding increases a previously shortened distance, grow
++         and keep that minimum width for the rest of this link. */
++      if (s->compact && width > s->width) s->floor = width;
++      if (width < s->floor) width = s->floor;
++      if (s->width != width || !s->compact) changed = true;
++      s->width = width; s->compact = true;
++      st->relocs[s->reloc].reloc->howto = &fhr_lr_howto;
++    }
++  oldsize = sec->size;
++  /* Copy spans, skipping unused high displacement bytes. */
++  bfd_vma read = 0, written = 0;
++  for (i = 0; i < st->site_count; ++i)
++    {
++      struct fhr_lr_site *s = st->sites + i;
++      bfd_vma end = s->offset + 3 + s->width;
++      memcpy (st->rebuilt + written, st->bytes + read, end - read);
++      written += end - read;
++      read = s->offset + 3 + s->original_width;
++    }
++  memcpy (st->rebuilt + written, st->bytes + read, st->size - read);
++  sec->size = written + st->size - read;
++  sec->contents = st->rebuilt;
++  for (i = 0; i < st->site_count; ++i)
++    {
++      struct fhr_lr_site *s = st->sites + i;
++      bfd_vma at = fhr_lr_map (st, s->offset);
++      if (s->compact) st->rebuilt[at + 2] = 0x2b + s->width;
++      else if (s->reloc < 0)
++        fhr_lr_write (st->rebuilt + at + 3, s->width,
++                      fhr_lr_map (st, s->local_target) - at);
++    }
++  for (i = 0; i < st->reloc_count; ++i)
++    st->relocs[i].reloc->address = fhr_lr_map (st, st->relocs[i].offset);
++  for (j = 0; j < st->symbol_count; ++j)
++    {
++      struct fhr_lr_symbol *s = st->symbols + j;
++      s->symbol->value = fhr_lr_map (st, s->value);
++      if (s->hash) s->hash->u.def.value = fhr_lr_map (st, s->hash_value);
++    }
++  *again = changed || sec->size != oldsize;
++  return true;
++}
++
++static bool
++fhr_finalize_relax (bfd *abfd, struct bfd_link_info *info)
++{
++  asection *out;
++  for (out = abfd->sections; out; out = out->next)
++    {
++      struct fhr_section_data *dest = fhr_Get_Section_Data (abfd, abfd->tdata.any, out);
++      struct bfd_link_order *lo;
++      for (lo = out->map_head.link_order; lo; lo = lo->next)
++        {
++          struct fhr_lr_state *st;
++          size_t i;
++          if (lo->type != bfd_indirect_link_order) continue;
++          asection *sec = lo->u.indirect.section;
++          st = sec->used_by_bfd;
++          if (!st) continue;
++          for (i = 0; i < st->reloc_count; ++i)
++            {
++              struct fhr_lr_reloc *r = st->relocs + i;
++              asection *to;
++              bfd_vma at, value, field = sec->output_offset + r->reloc->address;
++              unsigned int width = bfd_get_reloc_size (r->howto);
++              bool compact = r->reloc->howto == &fhr_lr_howto;
++              size_t j;
++              if (r->howto->pc_relative) continue;
++              if (!fhr_lr_target (r, info, &to, &at)) return false;
++              value = fhr_lr_map (to->used_by_bfd, at);
++              if (!bfd_is_abs_section (to))
++                value += to->output_offset + to->output_section->vma;
++              if (compact)
++                {
++                  for (j = 0; j < st->site_count; ++j)
++                    if (st->sites[j].reloc == (int)i) break;
++                  if (j == st->site_count) return false;
++                  width = st->sites[j].width;
++                  value -= out->vma + field - 3;
++                  if (width < 8)
++                    {
++                      bfd_signed_vma signed_value = value;
++                      if (signed_value < -((bfd_signed_vma)1 << (width * 8 - 1))
++                          || signed_value > ((bfd_signed_vma)1 << (width * 8 - 1)) - 1)
++                        { _bfd_error_handler ("FHR: compact PC displacement overflow"); return false; }
++                    }
++                }
++              if (!dest || !dest->buf_data || field > dest->buf_size
++                  || width > dest->buf_size - field) return false;
++              fhr_lr_write (dest->buf_data + field, width, value);
++            }
++        }
++    }
++  return true;
++}
++
+ static bool
+ fhr_Relax_Pcrel (bfd *abfd, struct fhr_section_data *data,
+                  asection *input, arelent *reloc, bfd_vma offset)
+@@ -1314,7 +1708,7 @@
+                 /* Only final same-output-section references can lose their
+                    loader relocation: separately loaded sections may move. */
+                 if (!bfd_link_relocatable (info)
+-                    && info->disable_target_specific_optimizations <= 0
++                    && info->disable_target_specific_optimizations <= 1
+                     && target_sec == sec
+                     && fhr_Relax_Pcrel (abfd, srcdata, input_sec, r, offset))
+                   continue;
+@@ -1377,6 +1771,8 @@
+ 		return false;
+ 	}
+ 
++  if (!bfd_link_relocatable (info) && !fhr_finalize_relax (abfd, info))
++    return false;
+ 	fhr_Get_Exe_Sec_Count ( abfd );
+ 
+ 	return fhr_Prepare_Exe_Relocs ( abfd, info );
+@@ -1963,7 +2359,7 @@
+ 	/* Routines used by the linker */
+ 	/* _bfd_sizeof_headers			*/ fhr_sizeof_headers,
+ 	/* _bfd_get_relocated_section_c */ bfd_generic_get_relocated_section_contents,
+-	/* _bfd_relax_section			*/ bfd_generic_relax_section,
++	/* _bfd_relax_section			*/ fhr_relax_section,
+ 	/* _bfd_link_hash_table_create	*/ _bfd_generic_link_hash_table_create,
+ 	/* _bfd_link_add_symbols		*/ fhr_link_add_symbols,
+ 	/* _bfd_link_just_syms			*/ NULL,
+--- a/gas/config/tc-rvm.c
++++ b/gas/config/tc-rvm.c
+@@ -253,6 +253,78 @@
+ 	(void)s_comm_internal ( ignore, s_rvm_comm_parse_extra );
+ }
+ 
++/* Versioned opt-in: only instruction-only, unaligned code sections may be
++   resized by the final linker. Mapping symbols cover every symbolic PC use.
++   Raw data, explicit PC modes and symbolic constant differences opt out. */
++static segT rvm_lr_seen[4][1024];
++static unsigned int rvm_lr_count[4];
++
++void
++rvm_linkrelax_note (int kind)
++{
++  static unsigned long serial;
++  static uint64_t identity;
++  if (!identity)
++    {
++      const unsigned char *p = (const unsigned char *)out_file_name;
++      identity = UINT64_C (14695981039346656037);
++      while (*p) { identity ^= *p++; identity *= UINT64_C (1099511628211); }
++    }
++  char name[128];
++  symbolS *sym;
++  unsigned int i;
++  if (kind != 2 && !(now_seg->flags & SEC_CODE)) return;
++  for (i = 0; i < rvm_lr_count[kind]; ++i)
++    if (rvm_lr_seen[kind][i] == now_seg) return;
++  if (rvm_lr_count[kind] == 1024) as_fatal ("Too many RVM relaxation sections");
++  rvm_lr_seen[kind][rvm_lr_count[kind]++] = now_seg;
++  snprintf (name, sizeof name, "__rvm_lr_%s_%016" PRIx64 "_%lu",
++            kind == 0 ? "v1" : kind == 1 ? "block" : kind == 2 ? "object_block" : "end",
++            identity, serial++);
++  sym = symbol_new (name, now_seg, frag_now, frag_now_fix ());
++  S_SET_EXTERNAL (sym);
++  symbol_table_insert (sym);
++}
++
++void
++rvm_linkrelax_end (void)
++{
++  unsigned int i;
++  for (i = 0; i < rvm_lr_count[0]; ++i)
++    {
++      subseg_set (rvm_lr_seen[0][i], 0);
++      rvm_linkrelax_note (3);
++    }
++}
++
++bfd_reloc_code_real_type
++rvm_parse_cons (expressionS *exp, int bytes ATTRIBUTE_UNUSED)
++{
++  char *start = input_line_pointer, *end, *p;
++  bool identifier = false;
++  expression (exp);
++  end = input_line_pointer;
++  for (p = start; p < end; ++p)
++    {
++      /* Skip whole numeric tokens, including 0x... and 0b... literals. */
++      if (isdigit ((unsigned char)*p))
++        { while (p + 1 < end && isalnum ((unsigned char)p[1])) ++p; }
++      else if (isalpha ((unsigned char)*p) || *p == '_' || *p == '.' || *p == '$')
++        identifier = true;
++    }
++  if ((exp->X_op != O_constant && exp->X_op != O_symbol)
++      || (exp->X_op == O_constant && identifier))
++    rvm_linkrelax_note (2);
++  return BFD_RELOC_NONE;
++}
++
++static void
++s_rvm_org (int ignore)
++{
++  rvm_linkrelax_note (1);
++  s_org (ignore);
++}
++
+ static void
+ s_rvm_section ( int ignore ATTRIBUTE_UNUSED )
+ {
+@@ -301,6 +373,7 @@
+ /* -- */
+ 
+ const pseudo_typeS md_pseudo_table[] = { { "section", s_rvm_section, 0 },
++    { "org", s_rvm_org, 0 },
+ 										 { "type", s_rvm_ignore, 0 },
+ 										 { "size", s_rvm_ignore, 0 },
+ 										 { "ident", s_rvm_ignore, 0 },
+@@ -1911,6 +1984,7 @@
+ 		// printf ( "Found 1 : %s -> %s\n", op->Name, argbuf );
+ 
+ 		argbuf += len;
++        rvm_linkrelax_note (0);
+ 
+         if (rvm_assemble_relaxable (op, argbuf))
+           return;
+--- a/gas/config/tc-rvm.h
++++ b/gas/config/tc-rvm.h
+@@ -33,6 +33,14 @@
+ /* Displacements are relative to the opcode, three bytes before fr_fix. */
+ #define TC_PCREL_ADJUST(FRAG) 3
+ 
++extern void rvm_linkrelax_note (int);
++extern void rvm_linkrelax_end (void);
++#define md_finish rvm_linkrelax_end
++extern bfd_reloc_code_real_type rvm_parse_cons (expressionS *, int);
++#define md_cons_align(N) rvm_linkrelax_note (1)
++#define md_do_align(N,F,L,M,A) do { if ((N) > 0) rvm_linkrelax_note (1); } while (0)
++#define TC_PARSE_CONS_EXPRESSION(E,N) rvm_parse_cons (E,N)
++
+ #define WORKING_DOT_WORD
+ 
+ #endif
+--- a/gas/config/rvm_parse.c
++++ b/gas/config/rvm_parse.c
+@@ -863,6 +863,9 @@
+ 		in.pos	 = p;
+ 	}
+ 
++  if (outbuf && cmdid >= OAM_R8_0_PC && cmdid <= OAM_D64_PC)
++    rvm_linkrelax_note (1);
++
+ 	/* General bit instructions use a bit number, then a quad-sized
+ 	   register/memory value. Reject invalid literal indices and destinations. */
+ 	if ( OpcodeID >= Opcode_BClr && OpcodeID <= Opcode_BTst && cmdid >= OAM_56 )
+@@ -1522,6 +1525,9 @@
+ 				}
+ 				else
+ 				{
++                    /* Eligible first operands use the tracked relaxation
++                       fragment path. Other symbolic PC operands opt out. */
++                    if (outbuf) rvm_linkrelax_note (1);
+ 					// Keep local symbol calls/jumps PC-relative, but let GAS
+ 					// resolve the final displacement from the instruction
+ 					// location instead of baking in X_add_number directly.

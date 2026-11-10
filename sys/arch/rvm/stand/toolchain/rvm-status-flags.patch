@@ -1,0 +1,171 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -42,6 +42,7 @@
+ #include "calls.h"
+ #include "expr.h"
+ #include "builtins.h"
++#include "langhooks.h"
+ 
+ /* This file should be included last.  */
+ #include "target-def.h"
+@@ -1147,6 +1148,85 @@
+ 	return ( false );
+ }
+ 
++/* Flag builtins return a snapshot taken immediately after the operation.
++   Keeping the operation and snapshot in one RTL instruction prevents reload
++   or scheduling from changing the flags before they are captured. Ignoring
++   the return value emits only the two-byte flag instruction. */
++static const char *const rvm_flag_builtins[] = {
++  "__builtin_rvm_clrs",
++  "__builtin_rvm_clrc", "__builtin_rvm_setc",
++  "__builtin_rvm_clrv", "__builtin_rvm_setv",
++  "__builtin_rvm_clrz", "__builtin_rvm_setz",
++  "__builtin_rvm_clrn", "__builtin_rvm_setn",
++  "__builtin_rvm_clrx", "__builtin_rvm_setx",
++  "__builtin_rvm_clri", "__builtin_rvm_seti"
++};
++static const unsigned rvm_flag_builtin_count = ARRAY_SIZE (rvm_flag_builtins);
++static tree rvm_builtin_decls[ARRAY_SIZE (rvm_flag_builtins) + 2];
++
++static void
++rvm_init_builtins (void)
++{
++  tree type = build_function_type_list (long_unsigned_type_node, NULL_TREE);
++  for (unsigned i = 0; i < ARRAY_SIZE (rvm_builtin_decls); ++i)
++    {
++      const char *name = i < rvm_flag_builtin_count ? rvm_flag_builtins[i]
++        : i == rvm_flag_builtin_count ? "__builtin_rvm_get_sr"
++        : "__builtin_rvm_get_cr";
++      tree builtin_type = i == 0 ? build_function_type_list (void_type_node, NULL_TREE) : type;
++      tree decl = add_builtin_function (name, builtin_type, i, BUILT_IN_MD, NULL, NULL_TREE);
++      TREE_NOTHROW (decl) = 1;
++      rvm_builtin_decls[i] = decl;
++    }
++}
++
++static tree
++rvm_builtin_decl (unsigned code, bool initialize_p ATTRIBUTE_UNUSED)
++{
++  return code < ARRAY_SIZE (rvm_builtin_decls) ? rvm_builtin_decls[code] : error_mark_node;
++}
++
++static rtx
++rvm_expand_builtin (tree exp, rtx target, rtx subtarget ATTRIBUTE_UNUSED,
++                    machine_mode mode ATTRIBUTE_UNUSED, int ignore)
++{
++  tree decl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
++  unsigned code = DECL_MD_FUNCTION_CODE (decl);
++  if (code < rvm_flag_builtin_count && (ignore || code == 0))
++    {
++      emit_insn (gen_rvm_flag_write (GEN_INT (code)));
++      return const0_rtx;
++    }
++  if (!target || GET_MODE (target) != DImode || !REG_P (target))
++    target = gen_reg_rtx (DImode);
++  if (code < rvm_flag_builtin_count)
++    {
++      /* CLRS switches to user mode, where MFCTRL SR is privileged. Its
++         result is deliberately unavailable: use CLRS only for the mode
++         transition, with no captured result. */
++      if (code == 0)
++        {
++          error ("the result of %<__builtin_rvm_clrs%> is unavailable after leaving supervisor mode");
++          return const0_rtx;
++        }
++      emit_insn (gen_rvm_flag_snapshot (target, GEN_INT (code)));
++    }
++  else if (code == rvm_flag_builtin_count)
++    emit_insn (gen_rvm_read_sr (target));
++  else if (code == rvm_flag_builtin_count + 1)
++    emit_insn (gen_rvm_read_cr (target));
++  else
++    gcc_unreachable ();
++  return target;
++}
++
++#undef TARGET_INIT_BUILTINS
++#define TARGET_INIT_BUILTINS rvm_init_builtins
++#undef TARGET_BUILTIN_DECL
++#define TARGET_BUILTIN_DECL rvm_builtin_decl
++#undef TARGET_EXPAND_BUILTIN
++#define TARGET_EXPAND_BUILTIN rvm_expand_builtin
++
+ /* The Global `targetm' Variable.  */
+ 
+ /* Initialize the GCC target structure.  */
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -500,6 +500,7 @@
+     builtin_define_std ("rvm");			\
+     builtin_define_std ("RVM");			\
+     builtin_define ("__RVM_CALLER_ARG_HOME__=64"); \
++    builtin_define ("__RVM_FLAG_BUILTINS__=1"); \
+     if (TARGET_FPU) { builtin_define ("__RVM_FPU__=1"); builtin_define ("__RVM_FPU_GPR_ABI__=1"); } \
+     builtin_define ("__RVM_BIG_ENDIAN__");		\
+   }
+--- a/gcc/config/rvm/rvm.md
++++ b/gcc/config/rvm/rvm.md
+@@ -21,8 +21,62 @@
+ (define_c_enum "unspec" [
+   UNSPEC_PUSHF
+   UNSPEC_POPF
++  UNSPEC_FLAG_WRITE
++  UNSPEC_FLAG_SNAPSHOT
++  UNSPEC_READ_SR
++  UNSPEC_READ_CR
+ ])
+ 
++
++;; Explicit CPU state operations are volatile compiler barriers. The snapshot
++;; form captures SR/CR in the same instruction, before any compiler-generated
++;; moves or arithmetic can overwrite the flags. No SETS opcode exists.
++(define_insn "rvm_flag_write"
++  [(unspec_volatile [(match_operand 0 "const_int_operand" "n")] UNSPEC_FLAG_WRITE)
++   (clobber (reg:CC CC_REG))
++   (clobber (mem:BLK (scratch)))]
++  "IN_RANGE (INTVAL (operands[0]), 0, 12)"
++{
++  static const char *const names[] = {
++    "clrs", "clrc", "setc", "clrv", "setv", "clrz", "setz",
++    "clrn", "setn", "clrx", "setx", "clri", "seti"
++  };
++  return names[INTVAL (operands[0])];
++}
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_flag_snapshot"
++  [(set (match_operand:DI 0 "register_operand" "=r")
++        (unspec_volatile:DI [(match_operand 1 "const_int_operand" "n")]
++                            UNSPEC_FLAG_SNAPSHOT))
++   (clobber (reg:CC CC_REG))
++   (clobber (mem:BLK (scratch)))]
++  "IN_RANGE (INTVAL (operands[1]), 1, 12)"
++{
++  static const char *const names[] = {
++    "", "clrc", "setc", "clrv", "setv", "clrz", "setz",
++    "clrn", "setn", "clrx", "setx", "clri", "seti"
++  };
++  output_asm_insn (names[INTVAL (operands[1])], operands);
++  return INTVAL (operands[1]) >= 11 ? "mfctrl\tcr,%0" : "mfctrl\tsr,%0";
++}
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_read_sr"
++  [(set (match_operand:DI 0 "register_operand" "=r")
++        (unspec_volatile:DI [(reg:CC CC_REG)] UNSPEC_READ_SR))
++   (clobber (mem:BLK (scratch)))]
++  ""
++  "mfctrl\tsr,%0"
++  [(set_attr "rvm_result_z" "no")])
++
++(define_insn "rvm_read_cr"
++  [(set (match_operand:DI 0 "register_operand" "=r")
++        (unspec_volatile:DI [(const_int 0)] UNSPEC_READ_CR))
++   (clobber (mem:BLK (scratch)))]
++  ""
++  "mfctrl\tcr,%0"
++  [(set_attr "rvm_result_z" "no")])
+ 
+ ;; Symbolic addresses must use LEA: GAS cannot size symbolic immediates.
+ (define_predicate "rvm_data_operand"

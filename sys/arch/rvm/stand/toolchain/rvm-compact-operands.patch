@@ -1,0 +1,287 @@
+--- a/gas/config/rvm_parse.c
++++ b/gas/config/rvm_parse.c
+@@ -1100,22 +1100,19 @@
+ 			{
+ 				int64_t v = in.Value.X_add_number;
+ 
+-				/**/ if ( ( v >= INT8_MIN ) && ( v <= INT8_MAX ) )
+-				{
+-					rvm_OAM_RegData1 ( &in, outbuf, &o, OAM_D8_REG, (uint64_t)v );
+-				}
+-				else if ( ( v >= INT16_MIN ) && ( v <= INT16_MAX ) )
+-				{
+-					rvm_OAM_RegData2 ( &in, outbuf, &o, OAM_D16_REG, (uint64_t)v );
+-				}
+-				else if ( ( v >= INT32_MIN ) && ( v <= INT32_MAX ) )
+-				{
+-					rvm_OAM_RegData4 ( &in, outbuf, &o, OAM_D32_REG, (uint64_t)v );
+-				}
+-				else // (( v >= INT64_MIN ) && ( v <= INT64_MAX ))
+-				{
+-					rvm_OAM_RegData8 ( &in, outbuf, &o, OAM_D64_REG, (uint64_t)v );
+-				}
++                unsigned int width = 1;
++                while (width < 8
++                       && (v < -(INT64_C (1) << (width * 8 - 1))
++                           || v > (INT64_C (1) << (width * 8 - 1)) - 1))
++                  ++width;
++                if (outbuf)
++                  {
++                    outbuf[o] = OAM_D8_REG + width - 1;
++                    outbuf[o + 1] = in.Register;
++                    for (unsigned int j = 0; j < width; ++j)
++                      outbuf[o + 2 + j] = (uint64_t)v >> (8 * (width - 1 - j));
++                  }
++                o += 2 + width;
+ 			}
+ 			else
+ 			{
+@@ -1317,22 +1314,18 @@
+ 			{
+ 				int64_t v = in.Value.X_add_number;
+ 
+-				/**/ if ( ( v >= INT8_MIN ) && ( v <= INT8_MAX ) )
+-				{
+-					rvm_OAM_Data1 ( &in, outbuf, &o, OAM_D8_PC, (uint64_t)v );
+-				}
+-				else if ( ( v >= INT16_MIN ) && ( v <= INT16_MAX ) )
+-				{
+-					rvm_OAM_Data2 ( &in, outbuf, &o, OAM_D16_PC, (uint64_t)v );
+-				}
+-				else if ( ( v >= INT32_MIN ) && ( v <= INT32_MAX ) )
+-				{
+-					rvm_OAM_Data4 ( &in, outbuf, &o, OAM_D32_PC, (uint64_t)v );
+-				}
+-				else // (( v >= INT64_MIN ) && ( v <= INT64_MAX ))
+-				{
+-					rvm_OAM_Data8 ( &in, outbuf, &o, OAM_D64_PC, (uint64_t)v );
+-				}
++                unsigned int width = 1;
++                while (width < 8
++                       && (v < -(INT64_C (1) << (width * 8 - 1))
++                           || v > (INT64_C (1) << (width * 8 - 1)) - 1))
++                  ++width;
++                if (outbuf)
++                  {
++                    outbuf[o] = OAM_D8_PC + width - 1;
++                    for (unsigned int j = 0; j < width; ++j)
++                      outbuf[o + 1 + j] = (uint64_t)v >> (8 * (width - 1 - j));
++                  }
++                o += 1 + width;
+ 			}
+ 			else
+ 			{
+@@ -1657,22 +1650,26 @@
+ 				as_fatal ( "Error OAM_59" );
+ 			}
+ 
+-			/**/ if ( ( v <= UINT8_MAX ) || ( ( OpcodeID & 3 ) == 0 ) )
+-			{
+-				rvm_OAM_Data1 ( &in, outbuf, &o, OAM_56, (uint64_t)v );
+-			}
+-			else if ( ( v <= UINT16_MAX ) || ( ( OpcodeID & 3 ) == 1 ) )
+-			{
+-				rvm_OAM_Data2 ( &in, outbuf, &o, OAM_57, (uint64_t)v );
+-			}
+-			else if ( ( v <= UINT32_MAX ) || ( ( OpcodeID & 3 ) == 2 ) )
+-			{
+-				rvm_OAM_Data4 ( &in, outbuf, &o, OAM_58, (uint64_t)v );
+-			}
+-			else // ( v <= UINT64_MAX )
+-			{
+-				rvm_OAM_Data8 ( &in, outbuf, &o, OAM_59, (uint64_t)v );
+-			}
++            int64_t signed_value = (int64_t)v;
++            if (signed_value < 0)
++              {
++                if (signed_value >= INT8_MIN)
++                  rvm_OAM_Data1 (&in, outbuf, &o, OAM_60, v);
++                else if (signed_value >= INT16_MIN)
++                  rvm_OAM_Data2 (&in, outbuf, &o, OAM_61, v);
++                else if (signed_value >= INT32_MIN)
++                  rvm_OAM_Data4 (&in, outbuf, &o, OAM_62, v);
++                else
++                  rvm_OAM_Data8 (&in, outbuf, &o, OAM_63, v);
++              }
++            else if (v <= UINT8_MAX)
++              rvm_OAM_Data1 (&in, outbuf, &o, OAM_56, v);
++            else if (v <= UINT16_MAX)
++              rvm_OAM_Data2 (&in, outbuf, &o, OAM_57, v);
++            else if (v <= UINT32_MAX)
++              rvm_OAM_Data4 (&in, outbuf, &o, OAM_58, v);
++            else
++              rvm_OAM_Data8 (&in, outbuf, &o, OAM_59, v);
+ 			break;
+ 		}
+ 
+--- a/gas/config/tc-rvm.c
++++ b/gas/config/tc-rvm.c
+@@ -1794,6 +1794,87 @@
+   symbol_table_insert (symbol);
+ }
+ 
++
++/* Start with one displacement byte, then grow monotonically while GAS
++   lays out labels and alignment. Only references inside this input section
++   can shrink here; unresolved/cross-section operands retain ABS64 + metadata. */
++const relax_typeS md_relax_table[] = {
++  {0, 0, 0, 0},
++  {INT64_C (127), -INT64_C (128), 1, 2},
++  {INT64_C (32767), -INT64_C (32768), 2, 3},
++  {INT64_C (8388607), -INT64_C (8388608), 3, 4},
++  {INT64_C (2147483647), -INT64_C (2147483648), 4, 5},
++  {INT64_C (549755813887), -INT64_C (549755813888), 5, 6},
++  {INT64_C (140737488355327), -INT64_C (140737488355328), 6, 7},
++  {INT64_C (36028797018963967), -INT64_C (36028797018963968), 7, 8},
++  {0, 0, 8, 0},
++};
++
++static bool
++rvm_relaxable_opcode (unsigned int opcode)
++{
++  switch (opcode)
++    {
++    case Opcode_Jsr: case Opcode_Jmp: case Opcode_Lea_q:
++    case Opcode_Bss: case Opcode_Bsc: case Opcode_Bcs: case Opcode_Bcc:
++    case Opcode_Bvs: case Opcode_Bvc: case Opcode_Beq: case Opcode_Bne:
++    case Opcode_Bmi: case Opcode_Bpl: case Opcode_Bxs: case Opcode_Bxc:
++    case Opcode_Bhi: case Opcode_Bls: case Opcode_Bgt: case Opcode_Bge:
++    case Opcode_Blt: case Opcode_Ble: case Opcode_Bis: case Opcode_Bic:
++      return true;
++    default:
++      return false;
++    }
++}
++
++static bool
++rvm_assemble_relaxable (struct OStruct2 *op, char *args)
++{
++  expressionS exp;
++  char *saved, *end;
++  int pos, reg = 0, tail = op->OpcodeID == Opcode_Lea_q ? 2 : 0;
++  uint8_t *bytes;
++  fragS *fragment;
++  if (!(now_seg->flags & SEC_CODE) || !rvm_relaxable_opcode (op->OpcodeID))
++    return false;
++  while (*args == ' ' || *args == '\t') ++args;
++  /* Parenthesized numeric/register forms retain their existing semantics. */
++  if (!(isalpha ((unsigned char)*args) || *args == '_' || *args == '.'))
++    return false;
++  saved = input_line_pointer;
++  input_line_pointer = args;
++  expression (&exp);
++  end = input_line_pointer;
++  input_line_pointer = saved;
++  if (exp.X_op != O_symbol)
++    return false;
++  pos = end - args;
++  while (args[pos] == ' ' || args[pos] == '\t') ++pos;
++  if (tail)
++    {
++      if (args[pos++] != ',' || !rvm_read_ireg (args, &pos, &reg))
++        return false;
++    }
++  while (args[pos] == ' ' || args[pos] == '\t') ++pos;
++  if (args[pos] && args[pos] != ';') return false;
++  /* Reserve maximum storage before taking pointers into the fragment. */
++  frag_grow (13);
++  bytes = (uint8_t *)frag_more (3);
++  bytes[0] = op->OpcodeID >> 8;
++  bytes[1] = op->OpcodeID;
++  bytes[2] = OAM_55;
++  rvm_mark_pcrel_site (bytes, 11 + tail, op->OpcodeID);
++  fragment = frag_now;
++  char *variable = frag_var (rs_machine_dependent, 8 + tail, 1 + tail,
++                            1, exp.X_add_symbol, exp.X_add_number,
++                            (char *)bytes);
++  memset (variable, 0, 8 + tail);
++  if (tail) { variable[8] = OAM_Reg; variable[9] = reg; }
++  /* fr_var stores the fixed-size suffix; width is fr_subtype. */
++  fragment->fr_var = tail;
++  return true;
++}
++
+ void
+ md_assemble ( char * argbuf )
+ {
+@@ -1831,6 +1912,9 @@
+ 
+ 		argbuf += len;
+ 
++        if (rvm_assemble_relaxable (op, argbuf))
++          return;
++
+ 		// Calc buffer size
+ 		size = rvm_fill ( op, argbuf, NULL );
+ 
+@@ -1950,18 +2034,48 @@
+ 	return 0;
+ }
+ 
++static bool
++rvm_frag_is_local (fragS *frag, segT section)
++{
++  return S_IS_DEFINED (frag->fr_symbol)
++         && !S_IS_WEAK (frag->fr_symbol)
++         && S_GET_SEGMENT (frag->fr_symbol) == section;
++}
++
+ int
+-md_estimate_size_before_relax ( fragS * fragP ATTRIBUTE_UNUSED, segT seg ATTRIBUTE_UNUSED )
+-{
+-	// printf ( "md_estimate_size_before_relax\n" );
+-
+-	return 0;
++md_estimate_size_before_relax (fragS *frag, segT section)
++{
++  if (!rvm_frag_is_local (frag, section)) frag->fr_subtype = 8;
++  return frag->fr_var + frag->fr_subtype;
+ }
+ 
+ void
+-md_convert_frag ( bfd * abfd ATTRIBUTE_UNUSED, segT sec ATTRIBUTE_UNUSED, fragS * fragP ATTRIBUTE_UNUSED )
+-{
+-	// printf ( "md_convert_frag\n" );
++md_convert_frag (bfd *abfd ATTRIBUTE_UNUSED, segT section, fragS *frag)
++{
++  unsigned int width = frag->fr_subtype;
++  unsigned int tail = frag->fr_var;
++  char *field = frag->fr_literal + frag->fr_fix;
++  if (tail) memmove (field + width, field + 8, tail);
++  if (rvm_frag_is_local (frag, section))
++    {
++      offsetT delta = S_GET_VALUE (frag->fr_symbol) + frag->fr_offset
++                      - (frag->fr_address + frag->fr_fix - 3);
++      if (width < 8
++          && (delta < -(INT64_C (1) << (width * 8 - 1))
++              || delta > (INT64_C (1) << (width * 8 - 1)) - 1))
++        as_fatal ("RVM PC-relative displacement overflow after relaxation");
++      field[-1] = OAM_D8_PC + width - 1;
++      md_number_to_chars (field, delta, width);
++    }
++  else
++    {
++      gas_assert (width == 8);
++      field[-1] = OAM_55;
++      fix_new (frag, frag->fr_fix, 8, frag->fr_symbol, frag->fr_offset,
++               false, BFD_RELOC_64);
++    }
++  frag->fr_fix += width + tail;
++  frag->fr_var = 0;
+ }
+ 
+ valueT
+--- a/gas/config/tc-rvm.h
++++ b/gas/config/tc-rvm.h
+@@ -28,6 +28,11 @@
+ #define TARGET_BYTES_BIG_ENDIAN 1
+ #define md_number_to_chars	number_to_chars_bigendian
+ 
++extern const struct relax_type md_relax_table[];
++#define TC_GENERIC_RELAX_TABLE md_relax_table
++/* Displacements are relative to the opcode, three bytes before fr_fix. */
++#define TC_PCREL_ADJUST(FRAG) 3
++
+ #define WORKING_DOT_WORD
+ 
+ #endif

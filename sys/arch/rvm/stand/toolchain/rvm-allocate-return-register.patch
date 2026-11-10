@@ -1,0 +1,45 @@
+--- a/gcc/config/rvm/rvm.cc
++++ b/gcc/config/rvm/rvm.cc
+@@ -365,6 +365,16 @@
+ #ifdef TARGET_RVMBOX
+ 	target_flags |= MASK_HAS_MULX;
+ #endif
++}
++
++/* Multiword return operands occupy R0/R1. LRA cannot reload a return
++   pair with only its first half allocatable, so honor an explicit reservation
++   of either half by keeping the complete pair fixed. */
++static void
++rvm_conditional_register_usage (void)
++{
++  if (fixed_regs[RVM_R0] || fixed_regs[RVM_R1])
++    fixed_regs[RVM_R0] = fixed_regs[RVM_R1] = 1;
+ }
+ 
+ /* Emit a small add/subtract with an unsigned magnitude.  A zero delta
+@@ -1342,6 +1352,9 @@
+ // #undef TARGET_TRAMPOLINE_INIT
+ // #define TARGET_TRAMPOLINE_INIT rvm_trampoline_init
+ 
++#undef TARGET_CONDITIONAL_REGISTER_USAGE
++#define TARGET_CONDITIONAL_REGISTER_USAGE rvm_conditional_register_usage
++
+ #undef TARGET_OPTION_OVERRIDE
+ #define TARGET_OPTION_OVERRIDE rvm_option_override
+ 
+--- a/gcc/config/rvm/rvm.h
++++ b/gcc/config/rvm/rvm.h
+@@ -227,9 +227,11 @@
+ 	"ALL_REGS" \
+ }
+ 
+-// User (GPR) regs r10-r49
++/* R0/R1 are allocatable, call-clobbered result registers. Keep the pair
++   available together for 128-bit results. Arguments and special registers
++   stay fixed; R10-R49 remain general working registers. */
+ #define FIXED_REGISTERS \
+-{	1, 1, 1, 1, 1, 1, 1, 1, \
++{	0, 0, 1, 1, 1, 1, 1, 1, \
+ 	1, 1, 0, 0, 0, 0, 0, 0, \
+ 	0, 0, 0, 0, 0, 0, 0, 0, \
+ 	0, 0, 0, 0, 0, 0, 0, 0, \

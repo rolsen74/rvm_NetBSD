@@ -3,6 +3,9 @@
 #include <machine/asm.h>
         section ".text",code
         SecAlign 4
+        xref __rvm_rodata_base
+        xref __rvm_data_base
+        xref __rvm_bss_base
         xdef rvm_user_probe
 /* R2=root, R3=user PC, R4=user SP; caller masks IRQs across the probe. */
 rvm_user_probe:
@@ -36,10 +39,18 @@ rvm_user_probe_return:
         xref rvm_user_probe_dispatch
 rvm_user_probe_entry:
         pushm r0-r62
+        /* Absolute relocated LEAs bootstrap the section bases themselves. */
+        lea __rvm_rodata_base,r50
+        lea __rvm_data_base,r51
+        lea __rvm_bss_base,r52
         move.q r63,r2
+#if RVM_C_CALL_HOME
         sub.q #RVM_C_CALL_HOME,r63
+#endif
         jsr rvm_user_probe_dispatch
+#if RVM_C_CALL_HOME
         add.q #RVM_C_CALL_HOME,r63
+#endif
         popm r0-r62
         rte
 

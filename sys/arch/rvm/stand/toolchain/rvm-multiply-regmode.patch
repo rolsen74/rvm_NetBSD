@@ -1,0 +1,61 @@
+--- a/gas/config/tc-rvm.c
++++ b/gas/config/tc-rvm.c
+@@ -439,6 +439,7 @@ enum ArgType
+ {
+ 	AT_None,
+ 	AT_IReg,
++	AT_IRegMode,
+ 	AT_CReg,
+ 	AT_FReg,
+ 	AT_FRegMode,
+@@ -748,10 +749,10 @@ static const struct OStruct1 OArray[] =
+ 
+ 	  // --
+ 
+-	  { "muls.b", Opcode_Muls_b, AT_SrcMode, AT_IReg, AT_None, AT_None },
+-	  { "muls.w", Opcode_Muls_w, AT_SrcMode, AT_IReg, AT_None, AT_None },
+-	  { "muls.l", Opcode_Muls_l, AT_SrcMode, AT_IReg, AT_None, AT_None },
+-	  { "muls.q", Opcode_Muls_q, AT_SrcMode, AT_IReg, AT_None, AT_None },
++	  { "muls.b", Opcode_Muls_b, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
++	  { "muls.w", Opcode_Muls_w, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
++	  { "muls.l", Opcode_Muls_l, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
++	  { "muls.q", Opcode_Muls_q, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
+ 
+ 	  { "rmuls.b", Opcode_RMuls_b, AT_IReg, AT_IReg, AT_IReg, AT_None },
+ 	  { "rmuls.w", Opcode_RMuls_w, AT_IReg, AT_IReg, AT_IReg, AT_None },
+@@ -765,10 +766,10 @@ static const struct OStruct1 OArray[] =
+ 
+ 	  // --
+ 
+-	  { "mulu.b", Opcode_Mulu_b, AT_SrcMode, AT_IReg, AT_None, AT_None },
+-	  { "mulu.w", Opcode_Mulu_w, AT_SrcMode, AT_IReg, AT_None, AT_None },
+-	  { "mulu.l", Opcode_Mulu_l, AT_SrcMode, AT_IReg, AT_None, AT_None },
+-	  { "mulu.q", Opcode_Mulu_q, AT_SrcMode, AT_IReg, AT_None, AT_None },
++	  { "mulu.b", Opcode_Mulu_b, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
++	  { "mulu.w", Opcode_Mulu_w, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
++	  { "mulu.l", Opcode_Mulu_l, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
++	  { "mulu.q", Opcode_Mulu_q, AT_SrcMode, AT_IRegMode, AT_None, AT_None },
+ 
+ 	  { "rmulu.b", Opcode_RMulu_b, AT_IReg, AT_IReg, AT_IReg, AT_None },
+ 	  { "rmulu.w", Opcode_RMulu_w, AT_IReg, AT_IReg, AT_IReg, AT_None },
+@@ -1650,12 +1651,20 @@ rvm_fill_arg ( struct OStruct2 * op, char * argbuf, uint8_t * outbuf, int * argp
+ 		}
+ 
+ 		case AT_IReg:
++		case AT_IRegMode:
+ 		{
+ 			if ( ! rvm_read_ireg ( argbuf, &p, &reg ) )
+ 			{
+ 				as_fatal ( "Error parsing ireg" );
+ 			}
+ 
++			if ( at == AT_IRegMode )
++			{
++				if ( outbuf )
++					outbuf[o] = OAM_Reg;
++				o++;
++			}
++
+ 			if ( outbuf )
+ 			{
+ 				outbuf[o] = reg;
