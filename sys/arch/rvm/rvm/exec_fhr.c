@@ -6,12 +6,15 @@
 #include <sys/systm.h>
 #include <sys/exec.h>
 #include <sys/kmem.h>
+#include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/vnode.h>
 #include <sys/endian.h>
 #include <uvm/uvm_extern.h>
+
+#include <net/zlib.h>
 
 #define FHR_NSECT 32
 #define FHR_MAXFILE (16 * 1024 * 1024)
@@ -35,6 +38,72 @@ fhr_free(void *arg)
 	struct fhr_image *image = arg;
 	kmem_free(image->bytes, image->length);
 	kmem_free(image, sizeof(*image));
+}
+
+static void *
+fhr_zalloc(void *opaque, u_int count, u_int size)
+{
+	(void)opaque;
+	if (size != 0 && count > SIZE_MAX / size)
+		return NULL;
+	return malloc((size_t)count * size, M_TEMP, M_NOWAIT);
+}
+
+static void
+fhr_zfree(void *opaque, void *ptr)
+{
+	(void)opaque;
+	free(ptr, M_TEMP);
+}
+
+static int
+fhr_unpack(struct fhr_image *image)
+{
+	uint8_t *old = image->bytes, *expanded;
+	size_t packed, total;
+	z_stream stream;
+	int result;
+
+	/* Native executables are FHR64; both size words are big endian. */
+	if (image->length < 32)
+		return ENOEXEC;
+	packed = be64dec(old + 16);
+	total = be64dec(old + 24);
+	if (packed != image->length - 32 || total < 16 ||
+	    total > FHR_MAXMEM || total - 16 > UINT_MAX)
+		return ENOEXEC;
+	expanded = kmem_alloc(total, KM_SLEEP);
+	memcpy(expanded, old, 16);
+	expanded[7] = 0;
+	memset(&stream, 0, sizeof(stream));
+	stream.zalloc = fhr_zalloc;
+	stream.zfree = fhr_zfree;
+	stream.next_in = old + 32;
+	stream.avail_in = packed;
+	stream.next_out = expanded + 16;
+	stream.avail_out = total - 16;
+	result = inflateInit(&stream);
+	if (result == Z_OK) {
+		for (;;) {
+			uLong before_in = stream.total_in;
+			uLong before_out = stream.total_out;
+			result = inflate(&stream, Z_FINISH);
+			if (result != Z_OK ||
+			    (stream.total_in == before_in &&
+			    stream.total_out == before_out))
+				break;
+		}
+		inflateEnd(&stream);
+	}
+	if (result != Z_STREAM_END || stream.total_in != packed ||
+	    stream.total_out != total - 16) {
+		kmem_free(expanded, total);
+		return ENOEXEC;
+	}
+	kmem_free(old, image->length);
+	image->bytes = expanded;
+	image->length = total;
+	return 0;
 }
 
 /* CRC-16, polynomial x^16+x^15+x^2+1, MSB first, initial 0xffff. */
@@ -195,7 +264,7 @@ fhr_makecmds(struct lwp *l, struct exec_package *epp)
 	unsigned n;
 	int error;
 	if (epp->ep_hdrvalid < 16 || be32dec(h) != 0x46485200 ||
-	    h[4] != 1 || h[5] != 1 || h[6] != 0 || h[7] != 0 ||
+	    h[4] != 1 || h[5] != 1 || h[6] != 0 || h[7] > 1 ||
 	    be16dec(h + 8) != 0 || be16dec(h + 10) != 0x100 ||
 	    be16dec(h + 12) != 0x100 ||
 	    (n = be16dec(h + 14)) == 0 || n > FHR_NSECT ||
@@ -210,6 +279,8 @@ fhr_makecmds(struct lwp *l, struct exec_package *epp)
 	error = exec_read(l, epp->ep_vp, 0, image->bytes, image->length, 0);
 	if (error == 0 && memcmp(h, image->bytes, 16) != 0)
 		error = ENOEXEC;
+	if (error == 0 && h[7] == 1)
+		error = fhr_unpack(image);
 	if (error == 0)
 		error = fhr_parse(image, n);
 	if (error != 0) {

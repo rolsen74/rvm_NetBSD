@@ -18,6 +18,7 @@
 #define MACHINE			 "rvm"
 #define _MACHINE_ARCH	 rvm64
 #define MACHINE_ARCH	 "rvm64"
+#define MID_MACHINE	 MID_RVM
 
 /*
  * RVM MMU pages are 64 KiB.  NetBSD's MI page macros are derived

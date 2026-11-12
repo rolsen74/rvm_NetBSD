@@ -5,6 +5,11 @@ defflag opt_fhr.h EXEC_FHR
 
 file arch/rvm/rvm/kernel_locore.S
 file arch/rvm/rvm/exec_fhr.c exec_fhr
+file ../common/dist/zlib/adler32.c exec_fhr
+file ../common/dist/zlib/inffast.c exec_fhr
+file ../common/dist/zlib/inflate.c exec_fhr
+file ../common/dist/zlib/inftrees.c exec_fhr
+file ../common/dist/zlib/zutil.c exec_fhr
 file arch/rvm/rvm/kernel_machdep.c
 file arch/rvm/rvm/kernel_cons.c
 file arch/rvm/rvm/console_tty.c
@@ -47,6 +52,9 @@ file arch/rvm/dev/ld_rvm.c ld_rvm
 device rvmrnd
 attach rvmrnd at mainbus
 file arch/rvm/dev/rnd_rvm.c rvmrnd
+device rvmnet: arp, ether, ifnet
+attach rvmnet at mainbus
+file arch/rvm/dev/if_rvmnet.c rvmnet
 file arch/rvm/rvm/earlycons.c
 file arch/rvm/rvm/bootmem.c
 file arch/rvm/rvm/pmap.c

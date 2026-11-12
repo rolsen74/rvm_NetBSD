@@ -10,10 +10,24 @@ PF=${NETBSDSRCDIR}/sys/dist/pf
 
 .PATH: ${ROUTE} 
 
+.if ${MACHINE} == "rvm"
+PROG=netstat
+.else
 RUMPPRG=netstat
+.endif
 SRCS=	atalk.c bpf.c fast_ipsec.c if.c inet.c inet6.c \
 	main.c mbuf.c mroute.c mroute6.c pfkey.c pfsync.c route.c \
 	unix.c vtw.c rtutil.c
+.if ${MACHINE} == "rvm"
+SRCS+=	netstat_hostops.c
+CPPFLAGS.atalk.c+=	-D_KMEMUSER
+CPPFLAGS.inet.c+=	-D_KMEMUSER
+CPPFLAGS.inet6.c+=	-D_KMEMUSER
+CPPFLAGS.mbuf.c+=	-D_KMEMUSER
+CPPFLAGS.pfsync.c+=	-D_KMEMUSER
+CPPFLAGS.route.c+=	-D_KMEMUSER
+CPPFLAGS.vtw.c+=	-D_KMEMUSER
+.endif
 BINGRP=	kmem
 BINMODE=2555
 LDADD=	-lutil -lkvm

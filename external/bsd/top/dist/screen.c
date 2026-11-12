@@ -116,7 +116,9 @@ char smart_terminal;
 int  screen_length;
 int  screen_width;
 
+#ifndef RVM_LIBTERMINFO_PC
 char PC;
+#endif
 
 static int  tc_overstrike;
 static char termcap_buf[1024];

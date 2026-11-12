@@ -5,6 +5,12 @@
 
 USE_FORT?= yes	# setuid
 RUMPPRG=ping
+.if ${MACHINE} == "rvm"
+.undef RUMPPRG
+PROG=ping
+SRCS=ping.c ping_hostops.c
+MKIPSEC=no
+.endif
 MAN=	ping.8
 BINOWN=	root
 BINMODE=4555

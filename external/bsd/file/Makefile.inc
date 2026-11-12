@@ -22,10 +22,15 @@ CPPFLAGS+=	-DMAGIC='"${MAGIC}"' -DHAVE_CONFIG_H -DQUICK -DBUILTIN_ELF \
 		-DELFCORE -DVERSION='"${VERSION}"'
 CPPFLAGS+=	-I${.CURDIR}/../include -I${DIST}/src
 CPPFLAGS+=	${ZSTDCPPFLAGS}
+.if ${MACHINE} == "rvm"
+CPPFLAGS+=	-DRVM_FILE_NO_XZ
+.endif
 
 .PATH:		${DIST}/src ${DIST}/doc
 
+.if ${MACHINE} != "rvm"
 DPLIBS+=	lzma	${NETBSDSRCDIR}/external/public-domain/xz/lib
 DPLIBS+=	${ZSTDDPLIBS}
+.endif
 DPLIBS+=	bz2	${NETBSDSRCDIR}/lib/libbz2
 DPLIBS+=	z	${NETBSDSRCDIR}/lib/libz

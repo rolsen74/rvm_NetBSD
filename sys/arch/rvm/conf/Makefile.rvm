@@ -12,6 +12,11 @@ OPT_MODULAR=%MODULAR%
 KERNMISCMAKEFLAGS+=OBJCOPY=true LORDER=echo TSORT=cat
 CPPFLAGS+=-DNO_KERNEL_RCSIDS -D__NetBSD__ -DRVM_KERNEL ${RVM_KERNEL_CPPFLAGS}
 CFLAGS+=-fno-builtin -fno-pic -fno-pie -fno-stack-protector -mno-fpu
+# The FHR inflate pieces use zlib's standalone build and do not need gzip.
+.for zfile in adler32.c inffast.c inflate.c inftrees.c zutil.c
+CPPFLAGS.${zfile}+=-DZ_SOLO -DNO_GZIP
+COPTS.${zfile}+=-Wno-error=missing-prototypes -Wno-error=cast-qual
+.endfor
 DEBUG=
 ENTRYPOINT=_start
 # kernel_link.py groups sections; the FHR loader places and relocates them.

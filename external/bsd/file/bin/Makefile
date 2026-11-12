@@ -4,7 +4,7 @@
 
 .include "../Makefile.inc"
 
-.if ${MKSHARE} != "no"
+.if ${MKSHARE} != "no" && ${MACHINE} != "rvm"
 FILESDIR=	${MFILESDIR}
 FILES=		${MFILES}
 .endif
@@ -16,14 +16,14 @@ PROGDPLIBS	+= ${DPLIBS}
 MAN=		file.1 magic.5
 
 CLEANFILES+=	magic.mgc
-.if ${MKSHARE} != "no"
+.if ${MKSHARE} != "no" && ${MACHINE} != "rvm"
 realall:	file magic.mgc
 .endif
 
 LIBMAGIC!= cd ${.CURDIR}/../lib && ${PRINTOBJDIR}
 CPPFLAGS+=-I${LIBMAGIC}
 
-.if ${MKSHARE} != "no"
+.if ${MKSHARE} != "no" && ${MACHINE} != "rvm"
 magic.mgc: ${TOOL_MKMAGIC}
 	${_MKTARGET_CREATE}
 	${TOOL_MKMAGIC} -C -m ${DIST}/magic/magdir

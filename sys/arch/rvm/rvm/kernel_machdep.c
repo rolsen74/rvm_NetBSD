@@ -13,6 +13,7 @@
 #include <machine/boot.h>
 #include <machine/bootmem.h>
 #include <machine/pmap.h>
+#include <machine/mmu.h>
 #include <machine/pcb.h>
 #include <machine/bootcopy.h>
 #include <machine/psl.h>
@@ -131,4 +132,23 @@ int
 mm_md_physacc(paddr_t pa, vm_prot_t prot __unused)
 {
 	return pa < rvm_bootmem.ram_end ? 0 : EFAULT;
+}
+
+int
+mm_md_kernacc(void *ptr, vm_prot_t prot, bool *handled)
+{
+	vaddr_t va = (vaddr_t)ptr;
+	paddr_t pa;
+	unsigned long flags;
+
+	/* The low identity map is outside kernel_map, so uvm_kernacc cannot
+	 * validate it.  Check the actual PTE and leave kernel_map to UVM. */
+	if (va >= rvm_bootmem.ram_end)
+		return 0;
+	*handled = true;
+	if (!rvm_boot_pmap_lookup(va, &pa, &flags) || pa != va ||
+	    (prot & VM_PROT_READ && !(flags & RVM_PTE_READ)) ||
+	    (prot & VM_PROT_WRITE && !(flags & RVM_PTE_WRITE)))
+		return EFAULT;
+	return 0;
 }

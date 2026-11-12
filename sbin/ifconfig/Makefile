@@ -7,10 +7,17 @@
 
 .include <bsd.own.mk>
 
+.if ${MACHINE} == "rvm"
+PROG=	ifconfig
+.else
 RUMPPRG=	ifconfig
+.endif
 MAN=		ifconfig.8
 
 SRCS=		af_atalk.c af_link.c carp.c
+.if ${MACHINE} == "rvm"
+SRCS+=		ifconfig_hostops.c
+.endif
 
 CPPFLAGS+=	-I${NETBSDSRCDIR}/sys/dist/pf/
 SRCS+=		pfsync.c
@@ -22,7 +29,7 @@ SRCS+=		af_inet6.c
 
 .include "Makefile.common"
 
-.if (${MKRUMP} != "no")
+.if (${MKRUMP} != "no") && ${MACHINE} != "rvm"
 CPPFLAGS+=	-DRUMP_ACTION
 LDADD.rump +=	-lrumpres
 DPADD.rump +=	${LIBRUMPRES}

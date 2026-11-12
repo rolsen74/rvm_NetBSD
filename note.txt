@@ -1,0 +1,177 @@
+
+
+// ----------------
+// clearing stack
+
+L3DC5:	Pushf		r0-r24/r62				; $0010d4c4 0111 4000 0000 01ff ffff
+	VSub.q		#196,sp,sp				; $0010d4ce 012b c43f 3f
+	RMove.q		r2,r17					; $0010d4d3 00bb 0211
+	RMove.l		r3,r21					; $0010d4d7 00ba 0315
+	RMove.q		r4,r14					; $0010d4db 00bb 040e
+	RMove.q		r5,r16					; $0010d4df 00bb 0510
+	VAdd.q		#72,sp,r22				; $0010d4e3 0127 483f 16
+	Move.q		#$fefefefefefefefe,(r22)		; $0010d4e8 0027 3ffe fefe fefe fefe fe01 16
+	Move.l		#$fefefefe,(8.b,r22)			; $0010d4f5 0026 3efe fefe fe14 1608
+	VAdd.q		#84,sp,r23				; $0010d4ff 0127 543f 17
+	Move.q		#$fefefefefefefefe,(r23)		; $0010d504 0027 3ffe fefe fefe fefe fe01 17
+	Move.l		#$fefefefe,(8.b,r23)			; $0010d511 0026 3efe fefe fe14 1708
+	VAdd.q		#96,sp,r11				; $0010d51b 0127 603f 0b
+	Move.q		#$fefefefefefefefe,(r11)		; $0010d520 0027 3ffe fefe fefe fefe fe01 0b
+	Move.q		#$fefefefefefefefe,(8.b,r11)		; $0010d52d 0027 3ffe fefe fefe fefe fe14 0b08
+	Move.q		#$fefefefefefefefe,(16.b,r11)		; $0010d53b 0027 3ffe fefe fefe fefe fe14 0b10
+	Move.q		#$fefefefefefefefe,(24.b,r11)		; $0010d549 0027 3ffe fefe fefe fefe fe14 0b18
+	Move.q		#$fefefefefefefefe,(32.b,r11)		; $0010d557 0027 3ffe fefe fefe fefe fe14 0b20
+	Move.q		#$fefefefefefefefe,(40.b,r11)		; $0010d565 0027 3ffe fefe fefe fefe fe14 0b28
+	Move.q		#$fefefefefefefefe,(48.b,r11)		; $0010d573 0027 3ffe fefe fefe fefe fe14 0b30
+	Move.q		#$fefefefefefefefe,(56.b,r11)		; $0010d581 0027 3ffe fefe fefe fefe fe14 0b38
+	Move.q		#$fefefefefefefefe,(64.b,r11)		; $0010d58f 0027 3ffe fefe fefe fefe fe14 0b40
+	Move.q		#$fefefefefefefefe,(72.b,r11)		; $0010d59d 0027 3ffe fefe fefe fefe fe14 0b48
+	Move.q		#$fefefefefefefefe,(80.b,r11)		; $0010d5ab 0027 3ffe fefe fefe fefe fe14 0b50
+	Move.q		#$fefefefefefefefe,(88.b,r11)		; $0010d5b9 0027 3ffe fefe fefe fefe fe14 0b58
+	Move.l		#$fefefefe,(96.b,r11)			; $0010d5c7 0026 3efe fefe fe14 0b60
+	Clr.b		(r4)					; $0010d5d1 0020 0104
+
+// better to do it like this or maybe just use memset()
+
+    lea         (xx,sp),r0
+   	Move.q		#$fefefefefefefefe,(r0)+
+	Move.q		#$fefefefefefefefe,(r0)+
+	Move.q		#$fefefefefefefefe,(r0)+
+	Move.l		#$fefefefe,(r0)
+
+
+// ----------------
+// clearing stack
+
+L3E27:
+	Pushf		r0-r3/r10-r11/r62		; $0010ec8b 0111 4000 0000 0000 0c0f
+	RMove.q		r2,r10					; $0010ec95 00bb 020a
+	Lea			(L2216,PC),r11			; $0010ec99 005f 2ef9 28c2 000b
+	Lea			(259008.l,r51),r2		; $0010eca1 005f 1633 03f3 c000 02
+	Jsr			(r11)					; $0010ecaa 005d 010b
+	Lea			(236888.l,r52),r2		; $0010ecae 005f 1634 039d 5800 02
+	Jsr			(r11)					; $0010ecb7 005d 010b
+	Clr.l		(640.w,r10)				; $0010ecbb 0022 150a 0280
+	Clr.l		(644.w,r10)				; $0010ecc1 0022 150a 0284
+	Clr.l		(648.w,r10)				; $0010ecc7 0022 150a 0288
+	Clr.l		(652.w,r10)				; $0010eccd 0022 150a 028c
+	Clr.l		(656.w,r10)				; $0010ecd3 0022 150a 0290
+	Clr.l		(660.w,r10)				; $0010ecd9 0022 150a 0294
+	Clr.l		(664.w,r10)				; $0010ecdf 0022 150a 0298
+	Clr.l		(668.w,r10)				; $0010ece5 0022 150a 029c
+	Clr.l		(672.w,r10)				; $0010eceb 0022 150a 02a0
+	Clr.l		(676.w,r10)				; $0010ecf1 0022 150a 02a4
+	Clr.l		(680.w,r10)				; $0010ecf7 0022 150a 02a8
+	Clr.l		(684.w,r10)				; $0010ecfd 0022 150a 02ac
+	Tst.l		(688.w,r10)				; $0010ed03 001e 150a 02b0
+	Beq			(L3E28,PC)				; $0010ed09 0086 2c3a
+
+// better to do it like this or maybe just use bzero()/memset()
+
+	lea		(640.w,r10),r0
+	clr.q	(r0)+
+	clr.q	(r0)+
+	clr.q	(r0)+
+	clr.q	(r0)+
+	...
+	tst.l	(r0)
+
+// ----------------
+// use multiplyer, we have scale *2, *4, *8
+
+// and offen when we se -- VLsl.x	#1,reg,reg, (or #2, #3)
+// its can be improved
+
+L3FE8:
+	Pushf		r2-r3/r10-r11/r62		; $0011405a 0111 4000 0000 0000 0c0c
+	RMove.q		r3,r10					; $00114064 00bb 030a
+	VLsr.l		#12,r2,r0				; $00114068 0072 0c02 00
+	And.l		#$000fff00,r0			; $0011406d 0012 3a00 0fff 0000 00
+	VAnd.l		#255,r2,r1				; $00114076 0136 ff02 01
+	ROri.l		r1,r0,r0				; $0011407b 00aa 0100 00
+	RExtu.l		r0,r0					; $00114080 00f2 0000
+	VLsl.q		#3,r0,r0				; $00114084 0077 0300 00
+	Move.q		(236936.l,r52),r1		; $00114089 0027 1634 039d 8800 01
+	RAdd.q		r0,r1,r1				; $00114092 009b 0001 01
+	Move.q		(r1),r1					; $00114097 0027 0101 0001
+	Move.l		(48.b,r3),r0			; $0011409d 0026 1403 3000 00
+	Beq			(L3FEB,PC)				; $001140a4 0086 2d00 66
+	VCmp.l		#1,r0					; $001140a9 012e 0100
+	Beq			(L3FE9,PC)				; $001140ad 0086 2c0c
+	VMove.l		#22,r0					; $001140b1 0132 1600
+	Popf								; $001140b5 0110
+	Rts									; $001140b7 0060
+
+// use (r0.l*8,r1),r1 so we can get rid of rext, vlsl and radd
+
+L3FE8:
+	Pushf		r2-r3/r10-r11/r62		; $0011405a 0111 4000 0000 0000 0c0c
+	RMove.q		r3,r10					; $00114064 00bb 030a
+	VLsr.l		#12,r2,r0				; $00114068 0072 0c02 00
+	And.l		#$000fff00,r0			; $0011406d 0012 3a00 0fff 0000 00
+	VAnd.l		#255,r2,r1				; $00114076 0136 ff02 01
+	ROri.l		r1,r0,r0				; $0011407b 00aa 0100 00
+	Move.q		(236936.l,r52),r1		; $00114089 0027 1634 039d 8800 01
+	Move.q		(r0.l*8,r1),r1			; $00114097 0027 0101 0001
+	Move.l		(48.b,r3),r0			; $0011409d 0026 1403 3000 00
+	Beq			(L3FEB,PC)				; $001140a4 0086 2d00 66
+	VCmp.l		#1,r0					; $001140a9 012e 0100
+	Beq			(L3FE9,PC)				; $001140ad 0086 2c0c
+	VMove.l		#22,r0					; $001140b1 0132 1600
+	Popf								; $001140b5 0110
+	Rts									; $001140b7 0060
+
+// ----------------
+// calc direct into correct arg/reg for the function
+//
+// Jsr			(L3074,PC)
+// we can calc r2 directly and not use temp r0
+
+L4012:
+	Pushf		r0/r2-r4/r10/r62		; $0011486b 0111 4000 0000 0000 041d
+	RMove.l		r2,r10					; $00114875 00ba 020a
+	RClr.l		r4						; $00114879 00b6 04
+	VMove.l		#2,r3					; $0011487c 0132 0203
+	Lea			(236928.l,r52),r2		; $00114880 005f 1634 039d 8000 02
+	Jsr			(L2213,PC)				; $00114889 005d 2ef8 cc43
+	VCmp.l		#1,r10					; $0011488f 012e 010a
+	Ble			(L4013,PC)				; $00114893 0095 2c3f
+	VAdd.l		#10,r10,r0				; $00114897 0126 0a0a 00
+	RExtu.l		r0,r0					; $0011489c 00f2 0000
+	VLsl.q		#3,r0,r0				; $001148a0 0077 0300 00
+	VMove.l		#1,r3					; $001148a5 0132 0103
+	RMove.q		r0,r2					; $001148a9 00bb 0002
+	Jsr			(L3074,PC)				; $001148ad 005d 2efc afc6
+	Move.q		r0,(236936.l,r52)		; $001148b3 0027 0000 1634 039d 88
+	Move.l		r10,(236920.l,r52)		; $001148bc 0026 000a 1634 039d 78
+	VMove.l		#1,r2					; $001148c5 0132 0102
+	Jsr			(L408B,PC)				; $001148c9 005d 2d19 36
+	Popf								; $001148ce 0110
+	Rts									; $001148d0 0060
+
+or here
+
+	VSub.l		#1,r12,r0				; $00116c22 012a 010c 00
+	VDivs.l		#8,r0,r0				; $00116c27 00e6 0800 0000
+	VAdd.l		#1,r0,r0				; $00116c2d 0126 0100 00
+	VMove.l		#1,r3					; $00116c32 0132 0103
+	RExts.l		r0,r2					; $00116c36 00f6 0002
+	Jsr			(r15)					; $00116c3a 005d 010f
+
+// ----------------
+// set return val directly
+
+L40D1:
+	VMove.l		#5,r11					; $0011717e 0132 050b
+	RMove.l		r11,r0					; $00117182 00ba 0b00
+	Popf								; $00117186 0110
+	Rts									; $00117188 0060
+
+// ----------------
+// use a shift, with power of 2
+
+	VDivs.l		#8,r0,r0
+
+// ----------------
+
+

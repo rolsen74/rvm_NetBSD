@@ -461,7 +461,9 @@
 #endif
 
 /* Enable xzlib compression support */
+#ifndef RVM_FILE_NO_XZ
 #define XZLIBSUPPORT 1
+#endif
 
 /* Enable zlib compression support */
 #define ZLIBSUPPORT 1

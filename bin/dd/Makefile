@@ -3,8 +3,15 @@
 
 .include <bsd.own.mk>
 
+.if ${MACHINE} == "rvm"
+PROG=dd
+.else
 RUMPPRG=dd
+.endif
 SRCS=	args.c conv.c dd.c dd_swab.c misc.c position.c
+.if ${MACHINE} == "rvm"
+SRCS+=	dd_hostops.c
+.endif
 
 DPADD+=	${LIBUTIL}
 LDADD+=	-lutil

@@ -242,7 +242,7 @@ main(int argc, char **argv)
 				continue;
 			}
 			if (iswspace(ch)) {
-				if ((width = wcwidth(ch)) > 0)
+				if ((width = wcwidth((wchar_t)ch)) > 0)
 					cur_col += width;
 				continue;
 			}
@@ -319,10 +319,10 @@ main(int argc, char **argv)
 			l->l_lsize = need;
 		}
 		c = &l->l_line[l->l_line_len++];
-		c->c_char = ch;
+		c->c_char = (wchar_t)ch;
 		c->c_set = cur_set;
 		c->c_column = cur_col;
-		c->c_width = wcwidth(ch);
+		c->c_width = wcwidth((wchar_t)ch);
 		/*
 		 * If things are put in out of order, they will need sorting
 		 * when it is flushed.

@@ -154,7 +154,8 @@ def link(args):
         objects.extend(storage)
         script = work / 'kernel.ld'
         script.write_text(section_script(link_sets, storage))
-        subprocess.run([args.ld, '-T', str(script), '-e', args.entry, '-Map', str(args.output) + '.map',
+        # The current RVM linker cannot relax the larger INET kernel.
+        subprocess.run([args.ld, '--no-relax', '-T', str(script), '-e', args.entry, '-Map', str(args.output) + '.map',
                         '-o', str(args.output)] + list(map(str, objects)), check=True)
         # FHR executables do not encode e_entry. The loader starts at the
         # first code byte, even when ld was passed a different -e symbol.

@@ -4,14 +4,14 @@
 
 #include <sys/types.h>
 
-#ifdef RVM_KERNEL
+#if defined(RVM_KERNEL) || defined(_KMEMUSER)
 /* MI adaptive/spin mutexes, with one-word storage in normal kernels.
  * Owner flags occupy bits 0..3, spin IPL bits 4..7, lock bit 8.
  */
 struct kmutex {
 	volatile uintptr_t mtx_owner;
 } __aligned(8);
-#ifdef __MUTEX_PRIVATE
+#if defined(RVM_KERNEL) && defined(__MUTEX_PRIVATE)
 #include <sys/atomic.h>
 #include <machine/intr.h>
 #define __HAVE_SIMPLE_MUTEXES 1

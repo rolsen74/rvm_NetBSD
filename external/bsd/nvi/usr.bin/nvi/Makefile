@@ -15,6 +15,9 @@ WARNS=	5
 
 COPTS.exf.c+=		-Wno-format-nonliteral
 COPTS.msg.c+=		-Wno-format-nonliteral
+.if ${MACHINE} == "rvm"
+CWARNFLAGS+=	-Wno-sign-compare
+.endif
 .if ${USE_WIDECHAR} != "yes"
 COPTS.v_increment.c+=	-Wno-format-nonliteral
 CWARNFLAGS.gcc+=	-Wno-unused

@@ -189,7 +189,7 @@ main(int argc, char **argv)
 	struct passwd *passwd;
 	struct kinfo_proc2 *p, *plast;
 	int arg, ch, what;
-	char *memf, *nlistf;
+	const char *memf, *nlistf;
 	char buf[_POSIX2_LINE_MAX];
 	int cnt;
 	gid_t egid = getegid();
@@ -278,7 +278,20 @@ main(int argc, char **argv)
 	else
 		(void)setegid(egid);
 
-	if ((kd = kvm_openfiles(nlistf, memf, NULL, O_RDONLY, buf)) == NULL)
+#ifdef __rvm__
+	/* The live RVM path uses sysctl and /dev/kmem, not a kernel namelist.
+	 * The boot image is FHR, so it cannot serve as an nlist(3) file. */
+	const char *kernel_name = nlistf;
+	const char *swap_name = NULL;
+	if (kernel_name == NULL && memf == NULL)
+		kernel_name = "/dev/null";
+	if (nlistf == NULL && memf == NULL)
+		swap_name = "/dev/null";
+#else
+	const char *kernel_name = nlistf;
+	const char *swap_name = NULL;
+#endif
+	if ((kd = kvm_openfiles(kernel_name, memf, swap_name, O_RDONLY, buf)) == NULL)
 		errx(1, "%s", buf);
 
 	/* get rid of it now anyway */

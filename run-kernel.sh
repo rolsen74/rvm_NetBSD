@@ -12,6 +12,5 @@ source_config="$root/sys/arch/rvm/conf/vmemu.conf"
 if [ "$source_config" -nt "$obj/vm.config" ]; then
     cp "$source_config" "$obj/vm.config"
 fi
-cd "$obj"
 echo "RVM normal kernel: $obj/netbsd.fhr"
-exec "${VMEMU:-VMEmu}" -c vm.config "$@"
+exec python3 "$root/sys/arch/rvm/stand/fhr_run.py" "$obj" "$@"

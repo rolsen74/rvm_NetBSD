@@ -3,11 +3,18 @@
 
 .include <bsd.own.mk>
 
+.if ${MACHINE} == "rvm"
+PROG=route
+.else
 RUMPPRG=route
+.endif
 MAN=	route.8
 SRCS=	route.c show.c keywords.c rtutil.c
+.if ${MACHINE} == "rvm"
+SRCS+=	route_hostops.c
+.endif
 
-.if (${MKRUMP} != "no")
+.if (${MKRUMP} != "no") && ${MACHINE} != "rvm"
 CPPFLAGS+= -DRUMP_ACTION
 LDADD.rump += -lrumpres
 DPADD.rump += ${LIBRUMPRES}

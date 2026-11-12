@@ -6,9 +6,11 @@ if [ -n "${RVM_NATIVE_OBJDIR:-}" ]; then
     obj=$RVM_NATIVE_OBJDIR
 else
     obj="$script_dir/obj.rvm-native-root"
-    # Prefer the standard build, then the latest validated optimization build.
+    # Prefer the standard build, then the maintained native regcall build,
+    # followed by earlier validated optimization builds.
     # Keep earlier images selectable through RVM_NATIVE_OBJDIR.
     for candidate in "$obj" \
+        "$script_dir/obj.rvm-native-regcall" \
         "$script_dir/obj.rvm-native-bit-ops" \
         "$script_dir/obj.rvm-native-gcc-opt" \
         "$script_dir/obj.rvm-native-clean"; do
@@ -29,6 +31,5 @@ for file in bootloader.bin netbsd.fhr root-native.img vm.config; do
 done
 
 # Use the generated configuration, including its HARDFILE attachment.
-cd "$image"
 echo "RVM native kernel: $image/netbsd.fhr"
-exec "${VMEMU:-VMEmu}" -c vm.config "$@"
+exec python3 "$script_dir/sys/arch/rvm/stand/fhr_run.py" "$image" "$@"

@@ -12,6 +12,9 @@ WARNS=	4
 CWARNFLAGS+=	-Wno-missing-noreturn
 
 CPPFLAGS+=-I${.CURDIR} -I${TOPDIR} -I. -D_KERNTYPES
+.if ${MACHINE} == "rvm"
+CPPFLAGS+=-DRVM_LIBTERMINFO_PC
+.endif
 SRCS=	color.c commands.c display.c hash.c screen.c \
 	top.c username.c utils.c version.c m_netbsd.c
 DPSRCS+=sigdesc.h config.h

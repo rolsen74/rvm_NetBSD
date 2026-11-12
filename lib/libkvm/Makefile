@@ -9,6 +9,9 @@ USE_SHLIBDIR=	yes
 
 LIB=	kvm
 CPPFLAGS+=-DLIBC_SCCS -I${NETBSDSRCDIR}/sys -D_KMEMUSER
+.if ${MACHINE} == "rvm"
+CPPFLAGS+=-include machine/pmap.h
+.endif
 
 SRCS=	kvm.c kvm_file.c kvm_getloadavg.c kvm_proc.c
 

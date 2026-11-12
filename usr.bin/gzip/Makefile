@@ -11,6 +11,11 @@ MAN=		gzip.1 gzexe.1 zdiff.1 zforce.1 zgrep.1 zmore.1 znew.1
 
 .if !defined(HOSTPROG)
 
+.if ${MACHINE} == "rvm"
+DPADD=		${LIBZ} ${LIBBZ2}
+LDADD=		-lz -lbz2
+CPPFLAGS+=	-DNO_XZ_SUPPORT -DNO_ZSTD_SUPPORT
+.else
 DPADD=		${LIBZ} ${LIBBZ2} ${LIBLZMA}
 LDADD=		-lz -lbz2 -llzma
 
@@ -19,6 +24,7 @@ CPPFLAGS+=-DNO_ZSTD_SUPPORT
 .else
 CPPFLAGS+=	${ZSTDCPPFLAGS}
 PROGDPLIBS+=	${ZSTDDPLIBS}
+.endif
 .endif
 
 SCRIPTS=	gzexe zdiff zforce zgrep zmore znew

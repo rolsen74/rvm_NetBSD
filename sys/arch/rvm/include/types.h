@@ -22,6 +22,7 @@
 #define __HAVE_SYSCALL_INTERN 1
 #endif
 #define __HAVE_VM_PAGE_MD 1
+#define __HAVE_MM_MD_KERNACC 1
 #define __HAVE_RAS
 #ifndef _KERNEL
 #define __HAVE_ATOMIC64_OPS

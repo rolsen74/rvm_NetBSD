@@ -20,5 +20,10 @@ YHEADER=	1
 
 LDADD+= -ll -ledit -ltermcap
 DPADD+=	${LIBL} ${LIBEDIT} ${LIBTERMCAP}
+.if ${MACHINE} == "rvm"
+# scan.l supplies yywrap; libterminfo also provides the termcap interface.
+LDADD= -ledit -lterminfo
+DPADD= ${LIBEDIT} ${LIBTERMINFO}
+.endif
 
 .include <bsd.prog.mk>

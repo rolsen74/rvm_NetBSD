@@ -13,6 +13,7 @@
 #if defined( _KERNEL ) || defined( _KMEMUSER )
 
 #include <sys/cpu_data.h>
+#include <sys/device_if.h>
 
 struct lwp;
 struct proc;

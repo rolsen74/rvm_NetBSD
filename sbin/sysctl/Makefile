@@ -4,10 +4,17 @@
 .include <bsd.own.mk>
 #DBG=-g
 
+.if ${MACHINE} == "rvm"
+PROG=sysctl
+.else
 RUMPPRG=sysctl
+.endif
 MAN=	sysctl.8
 
 SRCS=	sysctl.c
+.if ${MACHINE} == "rvm"
+SRCS+=	sysctl_hostops.c
+.endif
 
 .PATH:	${.CURDIR}/../../lib/libc/gen
 CPPFLAGS+= -DRUMP_ACTION

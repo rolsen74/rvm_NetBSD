@@ -37,6 +37,8 @@ mainbus_attach(device_t parent __unused, device_t self, void *aux __unused)
 	config_found(self, __UNCONST(name), NULL, CFARGS_NONE);
 	name = "entropy";
 	config_found(self, __UNCONST(name), NULL, CFARGS_NONE);
+	name = "network";
+	config_found(self, __UNCONST(name), NULL, CFARGS_NONE);
 }
 
 static int

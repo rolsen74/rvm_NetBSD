@@ -1,0 +1,1 @@
+int lifecycle_counter;

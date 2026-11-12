@@ -69,6 +69,7 @@
 #define	MID_AARCH64	0x0b7	/* ARM AARCH64 */
 #define	MID_OR1K	0x0b8	/* OpenRISC 1000 */
 #define	MID_RISCV	0x0b9	/* Risc-V */
+#define	MID_RVM		0x0ba	/* RVM 64-bit virtual machine */
 
 #define	MID_HP200	0x0c8	/* hp200 (68010) BSD binary */
 
