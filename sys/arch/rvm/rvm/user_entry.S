@@ -10,6 +10,7 @@
         xref __rvm_bss_base
         xdef rvm_user_resume
         xref rvm_fpu_restore
+        xref rvm_icnt_ensure
 rvm_user_resume:
         move.q #RVM_KERNEL_CR,r0
         mtctrl r0,cr
@@ -43,6 +44,7 @@ rvm_user_resume:
         move.q r0,(r3)+
         move.q (RVM_TF_ROOT,r2),r0
         move.q r0,(r3)
+        jsr rvm_icnt_ensure
         move.q #RVM_USER_CR,r0
         mtctrl r0,cr
         popm r0-r62
@@ -64,5 +66,6 @@ rvm_user_exception_entry:
 #if RVM_C_CALL_HOME
         add.q #RVM_C_CALL_HOME,r63
 #endif
+        jsr rvm_icnt_ensure
         popm r0-r62
         rte

@@ -559,6 +559,11 @@ main(int argc, char *argv[])
 
 	(void)chown(ttyn, pwd->pw_uid,
 	    (gr = getgrnam(TTYGRPNAME)) ? gr->gr_gid : pwd->pw_gid);
+#ifdef __rvm__
+	/* getty leaves the console at 0600. Allow wall to reach logged-in ttys. */
+	if (chmod(ttyn, 0620) == -1)
+		warn("%s", ttyn);
+#endif
 
 	if (ttyaction(ttyn, "login", pwd->pw_name))
 		(void)printf("Warning: ttyaction failed.\n");

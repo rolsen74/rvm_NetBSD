@@ -6,6 +6,10 @@
 #include <sys/lwp.h>
 #include <sys/proc.h>
 #include <sys/sched.h>
+#ifdef MULTIPROCESSOR
+#include <sys/ipi.h>
+#include <sys/xcall.h>
+#endif
 #include <machine/asyncirq.h>
 #include <machine/boot.h>
 #include <machine/irq.h>
@@ -90,10 +94,29 @@ rvm_intr_resume(unsigned int previous)
 void
 cpu_need_resched(struct cpu_info *ci, struct lwp *l, int flags)
 {
-	KASSERT(ci == curcpu());
 	atomic_or_uint(&ci->ci_want_resched, flags);
 	if (l != NULL) l->l_md.md_astpending = 1;
 }
+
+#ifdef MULTIPROCESSOR
+/* Bounded HALT and ICNT provide the wakeup; the handler polls each tick. */
+void cpu_ipi(struct cpu_info *ci __unused) { }
+void
+xc_send_ipi(struct cpu_info *ci)
+{
+	if (ci != NULL) {
+		atomic_or_uint(&ci->ci_flags, 1);
+		return;
+	}
+	for (unsigned int i = 0; i < rvm_cpu_count; i++)
+	{
+		struct cpu_info *target = i == 0 ? &cpu_info_primary :
+		    &cpu_info_secondary[i - 1];
+		if (target != curcpu())
+			atomic_or_uint(&target->ci_flags, 1);
+	}
+}
+#endif
 
 void
 cpu_signotify(struct lwp *l)
@@ -111,6 +134,7 @@ cpu_need_proftick(struct lwp *l)
 void
 cpu_idle(void)
 {
+	void rvm_icnt_idle_ensure(void);
 	rvm_intr_disable();
 	KASSERT(CURCPU_IDLE_P() && (curlwp->l_flag & LW_IDLE));
 	KASSERT(curcpu()->ci_cpl == IPL_NONE && curcpu()->ci_intr_depth == 0 &&
@@ -121,10 +145,11 @@ cpu_idle(void)
 	while (curcpu()->ci_want_resched == 0)
 		__asm volatile("" ::: "memory");
 #else
-	/* UP: no work can be queued between this check and enabling IRQs.
-	 * The recognized assembly window handles an IRQ before HALT executes. */
-	if (curcpu()->ci_want_resched == 0 && !sched_curcpu_runnable_p())
+	/* The emulator advances ICNT during HALT and wakes us for its exception. */
+	if (curcpu()->ci_want_resched == 0 && !sched_curcpu_runnable_p()) {
+		rvm_icnt_idle_ensure();
 		rvm_idle_halt();
+	}
 	rvm_intr_apply();
 #endif
 }

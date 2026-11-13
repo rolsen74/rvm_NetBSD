@@ -15,7 +15,7 @@ options         INCLUDE_CONFIG_FILE      # Embed configuration in the kernel
 
 # Keep the first kernel small and debuggable.
 maxusers        8
-options         HZ=50                   # GeneralDriver GUI timer frequency
+options         HZ=50                   # ICNT scheduler clock frequency
 # FHR debug sections are not supported by the current external assembler.
 #options        DIAGNOSTIC              # Extra kernel consistency checks
 #options        DEBUG                   # Additional debugging checks
@@ -42,6 +42,7 @@ rvmnet0         at mainbus0             # Optional VMEmu TAP Ethernet
 
 # Basic pseudo-devices (enable when the associated kernel support is ready).
 pseudo-device   loop                    # Loopback network interface
+pseudo-device   bpfilter                # Packet capture and DHCP
 pseudo-device   pty                     # Pseudo-terminals
 #pseudo-device  clockctl                # User clock control
 

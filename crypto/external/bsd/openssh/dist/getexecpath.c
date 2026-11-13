@@ -38,6 +38,13 @@
 int
 getexecpath(char *buf, size_t len)
 {
+#ifdef __rvm__
+	/* FHR auxv has no AT_SUN_EXECNAME; let sshd use its argv[0] fallback. */
+	(void)buf;
+	(void)len;
+	errno = ENOENT;
+	return -1;
+#else
 	const AuxInfo *aux;
 
 	for (aux = _dlauxinfo(); aux->a_type != AT_NULL; ++aux)
@@ -49,6 +56,7 @@ getexecpath(char *buf, size_t len)
 		}
 	errno = ENOENT;
 	return -1;
+#endif
 }
 
 #ifdef TEST

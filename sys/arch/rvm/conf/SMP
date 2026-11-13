@@ -1,0 +1,11 @@
+# Up to eight RVM CPUs. Keep virtual caches disabled until cross-CPU
+# invalidation and shootdown support is present.
+include "arch/rvm/conf/GENERIC"
+options MULTIPROCESSOR
+cpu1 at mainbus0
+cpu2 at mainbus0
+cpu3 at mainbus0
+cpu4 at mainbus0
+cpu5 at mainbus0
+cpu6 at mainbus0
+cpu7 at mainbus0

@@ -38,7 +38,18 @@ OPENSSLINC=	${OPENSSLSRC}/include/openssl
 .PATH: ${OPENSSLSRC} ${OPENSSLINC}
 .PATH: ${OPENSSLSRC}/../include/openssl
 
+.if ${MACHINE_ARCH} == "rvm64"
+ECNI= yes
+ECNONISTZ= yes
+# The deprecated ENGINE auto-loader calls through a null target in static
+# RVM executables. TLS uses built-in providers instead of ENGINE modules.
+COPTS.init.c+= -DOPENSSL_NO_ENGINE
+.endif
+
 .include "srcs.inc"
+.if ${MACHINE_ARCH} == "rvm64"
+SRCS+= ecp_nistp384.c
+.endif
 .include "${.CURDIR}/../libdefault/srcs.inc"
 CPPFLAGS+= -I${.CURDIR}/../libdefault
 CPPFLAGS+= -I${OPENSSLSRC}/providers/common/include

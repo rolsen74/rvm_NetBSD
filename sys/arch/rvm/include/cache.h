@@ -33,7 +33,7 @@
 #endif
 #endif
 #ifndef _LOCORE
-/* Global UP maintenance. A later optimization can target individual pages.
+/* Global maintenance. A later optimization can target individual pages.
  * TLB tags include root/mode; invalidate after all mapping and R/M changes. */
 void rvm_tlb_invalidate_all(void);
 void rvm_icache_invalidate_all(void);

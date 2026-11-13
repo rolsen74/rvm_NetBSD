@@ -12,6 +12,8 @@ struct rvm_pv_entry {
 #endif
 };
 #ifdef RVM_KERNEL
+unsigned int rvm_pmap_guard(void);
+void rvm_pmap_unguard(unsigned int);
 volatile uint64_t *rvm_user_pte(pmap_t, vaddr_t);
 int rvm_user_pmap_prepare(pmap_t);
 int rvm_user_enter(pmap_t, vaddr_t, paddr_t, vm_prot_t, u_int);

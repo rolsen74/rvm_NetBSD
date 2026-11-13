@@ -12,7 +12,12 @@ LINTFLAGS+=	-X 247	# pointer cast between unrelated types
 LINTFLAGS+=	-X 298	# loss of accuracy in function call
 
 PROG=	syslogd
-SRCS=	syslogd.c utmpentry.c tls.c sign.c
+SRCS=	syslogd.c utmpentry.c
+.if ${MACHINE_ARCH} == "rvm64"
+CPPFLAGS+=-DDISABLE_TLS -DDISABLE_SIGN
+.else
+SRCS+=	tls.c sign.c
+.endif
 MAN=	syslogd.8 syslog.conf.5
 DPADD+=${LIBUTIL} ${LIBEVENT}
 LDADD+=-lutil -levent
@@ -32,8 +37,10 @@ CPPFLAGS+=-DOPENSSL_API_COMPAT=0x10100000L
 LDADD+=	-lwrap -lblocklist 
 DPADD+=	${LIBWRAP} ${LIBBLOCKLIST} 
 
+.if ${MACHINE_ARCH} != "rvm64"
 LDADD+=	-lssl -lcrypto
 DPADD+= ${LIBSSL} ${LIBCRYPTO}
+.endif
 
 # Overflow that appears impossible
 COPTS.syslogd.c+=        ${CC_WNO_FORMAT_TRUNCATION} ${CC_WNO_STRINGOP_TRUNCATION}

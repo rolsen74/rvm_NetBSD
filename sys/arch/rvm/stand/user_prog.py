@@ -18,7 +18,9 @@ def main():
     parser.add_argument('-l', dest='libraries', action='append', default=[])
     parser.add_argument('-L', dest='search', type=Path, action='append', default=[])
     parser.add_argument('objects', nargs='+')
-    args = parser.parse_args()
+    # bsd.prog.mk can interleave object files, direct archive paths, and -l
+    # flags in LDADD. argparse's default parser rejects such positional paths.
+    args = parser.parse_intermixed_args()
     prefix = args.toolchain.resolve()/'bin/rvm-netbsd-'
     lib = args.sysroot.resolve()/'usr/lib'
     objects = [str(lib/'crt0.o')] + args.objects + [str(lib/'crtbegin.o')]

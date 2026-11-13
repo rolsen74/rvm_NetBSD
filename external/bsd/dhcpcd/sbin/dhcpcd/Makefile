@@ -7,6 +7,11 @@ USE_FORT?=	yes	# network client (local server)
 .include <bsd.init.mk>
 .include "../../Makefile.inc"
 
+# The static RVM root has no service account or privilege separation daemon.
+.if ${MACHINE_ARCH} == "rvm64"
+SMALLPROG= yes
+.endif
+
 PROG=		dhcpcd
 SRCS=		common.c control.c dhcpcd.c duid.c eloop.c logerr.c
 SRCS+=		if.c if-options.c route.c sa.c script.c

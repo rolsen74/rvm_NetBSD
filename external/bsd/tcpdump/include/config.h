@@ -67,7 +67,9 @@
 /* #undef HAVE_LIBCAP_NG */
 
 /* Define to 1 if you have a usable `crypto' library (-lcrypto). */
+#ifndef __rvm__
 #define HAVE_LIBCRYPTO 1
+#endif
 
 /* Define to 1 if you have the `rpc' library (-lrpc). */
 /* #undef HAVE_LIBRPC */

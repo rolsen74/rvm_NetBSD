@@ -48,8 +48,11 @@ Func_Exe_Valid:
 		bne		.Exit
 
 		lea		.Str_File_OS,r9
+		cmp.w		#FHR_OS_NetBSD,(FHR_OSType,r10)
+		beq		.OS_Valid
 		cmp.w		#FHR_OS_RVM,(FHR_OSType,r10)
 		bne		.Exit
+.OS_Valid:
 
 		lea		.Str_File_CPU,r9
 		cmp.w		#FHR_CPU_RVM,(FHR_CPUType,r10)

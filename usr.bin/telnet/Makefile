@@ -67,9 +67,11 @@ LDADD+= ${LIBKRB5_LDADD}
 DPADD+= ${LIBKRB5_DPADD}
 .endif
 
+.if ${MACHINE_ARCH} != "rvm64"
 CPPFLAGS+=-DAUTHENTICATION -DENCRYPTION
 LDADD+= -ldes -lcrypto -lcrypt
 DPADD+=	${LIBDES} ${LIBCRYPTO} ${LIBCRYPT}
+.endif
 
 .if (${USE_PAM} != "no")
 LDADD+= -lpam ${PAM_STATIC_LDADD}

@@ -133,7 +133,7 @@ rvm_irq_set_cr:
         /* One idle wait. IRQ setup/return will be added before enabling IRQs. */
         xdef rvm_cpu_halt
 rvm_cpu_halt:
-        halt
+        halt #0
         rts
 
         xdef  rvm_boot_stop
@@ -145,7 +145,7 @@ rvm_boot_stop:
         and.q   #8,r1
         mtctrl  r1,cr
 .Lstop:
-        halt
+        halt #0
         jmp     .Lstop
 
         xdef  rvm_boot_get_sr

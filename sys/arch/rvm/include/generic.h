@@ -16,6 +16,7 @@
 #define RVM_TERM_COLUMNS 100
 #define RVM_TERM_ROWS 75
 #define RVM_TERM_XAUTOWRAP 1
+#define RVM_TERM_CURSOR 4
 
 struct rvm_generic_timer {
 	uint64_t control;

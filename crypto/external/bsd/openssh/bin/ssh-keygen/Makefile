@@ -15,6 +15,9 @@ COPTS.ssh-keygen.c+=	-Wno-pointer-sign
 
 COPTS.ssh-keygen.c+=	${CC_WNO_FORMAT_TRUNCATION}
 COPTS.ssh-keygen.c+= -Wno-error=deprecated-declarations
+.if ${MACHINE_ARCH} == "rvm64"
+COPTS.ssh-keygen.c+= -Wno-error
+.endif
 COPTS.moduli.c+= -Wno-error=deprecated-declarations
 COPTS.ssh-keygen.c+= ${${ACTIVE_CC} == "clang":? -Wno-error=invalid-noreturn :}
 

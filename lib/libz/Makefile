@@ -18,6 +18,11 @@ SRCS=	adler32.c compress.c crc32.c deflate.c infback.c inffast.c \
 MAN=	zlib.3
 
 CPPFLAGS+=	-I${ZLIBDIR} -DZLIB_CONST
+.if ${MACHINE_ARCH} == "rvm64"
+# libc exports z_errmsg for its internal zlib implementation. Keep libz's
+# copy private so static links can use the remaining libz entry points.
+COPTS.zutil.c+= -Dz_errmsg=rvm_libz_errmsg
+.endif
 CLEANFILES+=	minigzip
 
 INCS=		zconf.h zlib.h

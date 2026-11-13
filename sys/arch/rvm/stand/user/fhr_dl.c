@@ -322,7 +322,7 @@ parse_image(struct library *lib)
     long pagesize = sysconf(_SC_PAGESIZE);
 
     if (pagesize <= 0 || !take(&file, 16, &p) ||
-        memcmp(p, "FHR\0\1\1\2\0\0\0\1\0\1\0", 14) != 0 ||
+        memcmp(p, "FHR\0\1\1\2\0\0\0\1\3\1\0", 14) != 0 ||
         (lib->section_count = be16(p + 14)) == 0 ||
         lib->section_count > FHR_MAX_SECTIONS ||
         !take(&file, 12 * lib->section_count, &section_info))

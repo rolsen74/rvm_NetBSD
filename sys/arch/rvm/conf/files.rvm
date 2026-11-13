@@ -64,3 +64,4 @@ file dev/cons.c
 include "conf/majors.std"
 include "conf/majors.storage"
 device-major rvmcons char 500
+device-major bpf char 501 bpfilter

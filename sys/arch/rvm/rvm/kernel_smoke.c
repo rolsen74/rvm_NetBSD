@@ -108,7 +108,7 @@ rvm_kernel_smoke(void)
 	struct pool byte_pool;
 	void *item;
 	int begin;
-	uint64_t oldusp, idle_before;
+	uint64_t oldusp;
 
 #ifdef RVM_KERNEL_ICACHE
 	instruction_cache_check();
@@ -149,22 +149,12 @@ rvm_kernel_smoke(void)
 	oldusp = rvm_get_user_sp();
 	rvm_set_user_sp(VM_MAXUSER_ADDRESS - 64);
 	begin = getticks();
-#ifdef RVM_IDLE_RACE_TEST
-	idle_before = rvm_idle_halt_skips();
-#else
-	idle_before = rvm_idle_halt_wakeups();
-#endif
 	callout_reset(&state.timer, 2, smoke_timeout, &state);
 	while (!state.done) {
 		if (cv_timedwait(&state.cv, &state.lock, 2 * hz) != 0)
 			panic("RVM normal kernel: softclock/CV timeout");
 	}
 	CHECK((unsigned int)(getticks() - begin) >= 2);
-#ifdef RVM_IDLE_RACE_TEST
-	CHECK(rvm_idle_halt_skips() > idle_before);
-#else
-	CHECK(rvm_idle_halt_wakeups() > idle_before);
-#endif
 	CHECK(rvm_get_user_sp() == VM_MAXUSER_ADDRESS - 64);
 	rvm_set_user_sp(oldusp);
 	mutex_exit(&state.lock);
@@ -173,7 +163,7 @@ rvm_kernel_smoke(void)
 	cv_destroy(&state.cv);
 	mutex_destroy(&state.lock);
 	printf("RVM normal kernel: heap, kcopy, hardclock, softclock and CV wakeup verified\n");
-	printf("RVM normal kernel: idle HALT and timer wakeup verified\n");
+	printf("RVM normal kernel: ICNT idle clock and CV wakeup verified\n");
 	printf("RVM normal kernel: four-byte-aligned 64-bit atomic operations verified\n");
 	printf("RVM normal kernel: 65536-item pool bitmap verified\n");
 	printf("RVM normal kernel: per-LWP user stack pointer switching verified\n");

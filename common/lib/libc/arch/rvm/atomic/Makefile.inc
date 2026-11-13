@@ -1,4 +1,4 @@
-# Uncached uniprocessor user atomics; the kernel has IRQ-serialized atomics.
+# Restartable user atomics for the static, single-LWP build.
 .if defined(LIB) && ${LIB} == "c"
 SRCS+= rvm_atomic.S rvm_atomic_init.c rvm_atomic_c11.c membar_ops_nop.c
 SRCS+= atomic_load.c atomic_store.c atomic_is_lock_free.c

@@ -1,4 +1,4 @@
-/* User translations for the uncached, single-CPU RVM MMU.
+/* User translations for the uncached RVM MMU.
  * Page tables use UVM-owned pages, accessed through the supervisor direct map.
  * Each table occupies the first 2 KiB; ownership metadata follows it. Tables
  * are retained until pmap destruction, including after allocation failure.
@@ -72,12 +72,12 @@ lookup(pmap_t pm, vaddr_t va, bool create)
 int
 rvm_user_pmap_prepare(pmap_t pm)
 {
-	unsigned int guard = rvm_intr_suspend();
+	unsigned int guard = rvm_pmap_guard();
 	KASSERT(pm != pmap_kernel());
 	if (pm->pm_root == 0) pm->pm_root = alloc_table(pm);
 	int error = pm->pm_root != 0 ? 0 : ENOMEM;
 	rvm_cache_sync();
-	rvm_intr_resume(guard);
+	rvm_pmap_unguard(guard);
 	return error;
 }
 
@@ -123,7 +123,7 @@ rvm_user_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	KASSERT(((flags & VM_PROT_ALL) & ~prot) == 0);
 	pg = PHYS_TO_VM_PAGE(pa);
 	KASSERT(pg != NULL && !(pg->flags & PG_FREE));
-	guard = rvm_intr_suspend();
+	guard = rvm_pmap_guard();
 	link = find_mapping(pm, va);
 	pv = *link;
 	if (pv == NULL) pv = kmem_zalloc(sizeof(*pv), KM_NOSLEEP);
@@ -131,7 +131,7 @@ rvm_user_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	if (pte == NULL) {
 		if (*link == NULL && pv != NULL) kmem_free(pv, sizeof(*pv));
 		rvm_cache_sync();
-		rvm_intr_resume(guard);
+		rvm_pmap_unguard(guard);
 		if (!(flags & PMAP_CANFAIL)) panic("RVM user pmap: out of memory");
 		return ENOMEM;
 	}
@@ -159,7 +159,7 @@ rvm_user_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	if (flags & VM_PROT_WRITE) pg->mdpage.attrs |= ACCESS;
 	*pte = pa | bits;
 	rvm_cache_sync();
-	rvm_intr_resume(guard);
+	rvm_pmap_unguard(guard);
 	return 0;
 }
 
@@ -183,13 +183,13 @@ rvm_user_remove(pmap_t pm, vaddr_t start, vaddr_t end)
 	unsigned int guard;
 	struct rvm_pv_entry **link;
 	check_range(start, end);
-	guard = rvm_intr_suspend();
+	guard = rvm_pmap_guard();
 	for (link = &pm->pm_mappings; *link != NULL; ) {
 		if ((*link)->va >= start && (*link)->va < end) remove_mapping(pm, link);
 		else link = &(*link)->pm_next;
 	}
 	rvm_cache_sync();
-	rvm_intr_resume(guard);
+	rvm_pmap_unguard(guard);
 }
 
 void
@@ -204,7 +204,7 @@ rvm_user_protect(pmap_t pm, vaddr_t start, vaddr_t end, vm_prot_t prot)
 	if (prot & VM_PROT_READ) keep |= RVM_PTE_READ;
 	if (prot & VM_PROT_WRITE) keep |= RVM_PTE_WRITE;
 	if (prot & VM_PROT_EXECUTE) keep |= RVM_PTE_EXEC;
-	guard = rvm_intr_suspend();
+	guard = rvm_pmap_guard();
 	for (pv = pm->pm_mappings; pv != NULL; pv = pv->pm_next) {
 		if (pv->va >= start && pv->va < end) {
 			volatile uint64_t *pte = lookup(pm, pv->va, false);
@@ -212,19 +212,19 @@ rvm_user_protect(pmap_t pm, vaddr_t start, vaddr_t end, vm_prot_t prot)
 		}
 	}
 	rvm_cache_sync();
-	rvm_intr_resume(guard);
+	rvm_pmap_unguard(guard);
 }
 
 void
 rvm_user_unwire(pmap_t pm, vaddr_t va)
 {
-	unsigned int guard = rvm_intr_suspend();
+	unsigned int guard = rvm_pmap_guard();
 	struct rvm_pv_entry *pv = *find_mapping(pm, va);
 	KASSERT(pv != NULL && pv->wired);
 	pv->wired = 0;
 	pm->pm_stats.wired_count--;
 	rvm_cache_sync();
-	rvm_intr_resume(guard);
+	rvm_pmap_unguard(guard);
 }
 
 struct pmap *
@@ -261,11 +261,11 @@ void pmap_deactivate(struct lwp *l __unused) { }
 bool
 pmap_remove_all(pmap_t pm)
 {
-	unsigned int guard = rvm_intr_suspend();
+	unsigned int guard = rvm_pmap_guard();
 	KASSERT(pm != pmap_kernel());
 	while (pm->pm_mappings != NULL) remove_mapping(pm, &pm->pm_mappings);
 	rvm_cache_sync();
-	rvm_intr_resume(guard);
+	rvm_pmap_unguard(guard);
 	return false;
 }
 /* Advisory eager copying is optional; UVM faults populate the new address space. */

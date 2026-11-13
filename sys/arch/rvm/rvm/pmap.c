@@ -1,7 +1,7 @@
 /*
  * Supervisor pmap for the RVM six-level hardware walker. The initial wired
  * kernel window has preallocated tables: editing it never steals UVM memory.
- * Single CPU with IRQ-guarded transactions. Normal-kernel user translations
+ * SMP with serialized pmap transactions. Normal-kernel user translations
  * live in kernel_pmap.c. Optional I-cache covers immutable kernel text only.
  */
 #include <sys/param.h>
@@ -45,17 +45,64 @@ pmap_fail(void)
 	rvm_boot_stop();
 }
 
+#ifdef RVM_KERNEL
+#ifdef MULTIPROCESSOR
+static volatile uint64_t rvm_pmap_gate;
+extern uint64_t rvm_atomic_exchange64(volatile uint64_t *, uint64_t);
+#endif
+unsigned int
+rvm_pmap_guard(void)
+{
+	unsigned int guard = rvm_intr_suspend();
+#ifdef MULTIPROCESSOR
+	struct cpu_info *ci = curcpu();
+	if (ci->ci_pmap_depth++ == 0 && rvm_cpu_count > 1) {
+		while (rvm_atomic_exchange64(&rvm_pmap_gate, 1) != 0)
+			__asm volatile("" ::: "memory");
+		__asm volatile("" ::: "memory");
+	}
+#endif
+	return guard;
+}
+void
+rvm_pmap_unguard(unsigned int guard)
+{
+	rvm_cache_sync();
+#ifdef MULTIPROCESSOR
+	struct cpu_info *ci = curcpu();
+	KASSERT(ci->ci_pmap_depth != 0);
+	if (--ci->ci_pmap_depth == 0 && rvm_cpu_count > 1) {
+		__asm volatile("" ::: "memory");
+		(void)rvm_atomic_exchange64(&rvm_pmap_gate, 0);
+	}
+#endif
+	rvm_intr_resume(guard);
+}
+#endif
+
 static unsigned int pmap_guard(void)
 {
-	if (curlwp != NULL) return rvm_intr_suspend();
+	if (curlwp != NULL) {
+#ifdef RVM_KERNEL
+		return rvm_pmap_guard();
+#else
+		return rvm_intr_suspend();
+#endif
+	}
 	rvm_intr_disable();
 	if ((rvm_boot_get_cr() & ~(RVM_CR_INSTCACHE | RVM_CR_TLB)) != RVM_CR_MMU) pmap_fail();
 	return UINT_MAX;
 }
 static void pmap_unguard(unsigned int guard)
 {
-	rvm_cache_sync();
-	if (guard != UINT_MAX) rvm_intr_resume(guard);
+	if (guard != UINT_MAX) {
+#ifdef RVM_KERNEL
+		rvm_pmap_unguard(guard);
+#else
+		rvm_cache_sync();
+		rvm_intr_resume(guard);
+#endif
+	} else rvm_cache_sync();
 }
 
 static paddr_t

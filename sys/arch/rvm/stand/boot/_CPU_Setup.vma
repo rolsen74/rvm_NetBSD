@@ -214,7 +214,7 @@ Func_CPU_Setup:
 		vmove.q		#EMUCMD_PrintString,r2
 		lea		.Str_VBR_MemRead,r3
 		vmove.q		#-1,r4
-		halt
+		halt		#0
 		emufunc
 		emuexit
 

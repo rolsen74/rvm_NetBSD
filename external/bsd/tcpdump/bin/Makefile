@@ -192,8 +192,10 @@ AWKS= atime.awk packetdat.awk stime.awk send-ack.awk
 
 CPPFLAGS+=-DHAVE_CONFIG_H
 
+.if ${MACHINE_ARCH} != "rvm64"
 CPPFLAGS+=-DWITH_USER=\"_tcpdump\"
 CPPFLAGS+=-DWITH_CHROOT=\"/var/chroot/tcpdump\"
+.endif
 
 # XXX INET6 is too entangled into many of the L2 printers.
 #.if (${USE_INET6} != "no")
@@ -210,9 +212,11 @@ print-rt6.c
 CPPFLAGS+=-DHAVE_OS_IPV6_SUPPORT=1
 #.endif
 
-CPPFLAGS+=-DHAVE_LIBCRYPTO=1 -DHAVE_OPENSSL_EVP_H 
+.if ${MACHINE_ARCH} != "rvm64"
+CPPFLAGS+=-DHAVE_LIBCRYPTO=1 -DHAVE_OPENSSL_EVP_H
 LDADD+=	-lcrypto -lcrypt
 DPADD+=	${LIBCRYPTO} ${LIBCRYPT}
+.endif
 
 CLEANFILES+=	version.c tcpdump.8
 

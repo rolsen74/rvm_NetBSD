@@ -16,6 +16,8 @@
 	include		"EmuFunc.i"
 
 Autostart:
+	cpuid		r0
+	bne		SecondaryWait
 
 	; NetBSD bring-up: translation, interrupts and caches stay off.
 	rclr.q r0
@@ -129,6 +131,8 @@ CPU_Setup_Done:
 	emufunc
 
 	lea BootInfo,r2
+	lea SecondaryEntry,r0
+	move.q r13,(r0)
 	nop
 	clrz
 	jsr		(r13)
@@ -171,6 +175,16 @@ CPU_Setup_Done:
 .Str_Exit:		dc.b		10,"--> Normal Exit <--",10,0	
 .Str_Return:		dc.b		"Program Returned %d ($%X)",10,0
 
+SecondaryWait:
+	; The boot CPU publishes the relocated kernel entry after loading it.
+	lea SecondaryEntry,r10
+.SecondaryPoll:
+	move.q (r10),r13
+	tst.q r13
+	beq .SecondaryPoll
+	lea BootInfo,r2
+	jmp (r13)
+
 	include		"_CPU_Setup.vma"
 	include		"_Exe_Decrypt.vma"
 	include		"_Exe_GetSize.vma"
@@ -188,6 +202,10 @@ BootInfo:
 	dc.q RVM_BOOTINFO_MAGIC,RVM_BOOTINFO_VERSION,RVM_BOOTINFO_SIZE
 	dc.q 0,0,0,0,0
 	ds.b RVM_BOOTINFO_MAXSECTIONS*RVM_BI_SECTION_SIZE
+
+	cnop 0,8
+SecondaryEntry:
+	dc.q 0
 
 	dc.b "----"
 

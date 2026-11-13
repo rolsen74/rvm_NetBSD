@@ -1,26 +1,36 @@
-/* GeneralDriver timecounter, read-only host RTC, and alternating timer IRQs. */
+/* GeneralDriver timecounter/RTC; ICNT drives the scheduler clock. */
 #include <sys/param.h>
+#include <sys/atomic.h>
 #include <machine/user.h>
 #include <sys/systm.h>
 #include <sys/cpu.h>
 #include <sys/kernel.h>
 #include <sys/timetc.h>
 #include <sys/intr.h>
+#ifdef MULTIPROCESSOR
+#include <sys/ipi.h>
+#include <sys/xcall.h>
+#endif
 #include <dev/clock_subr.h>
 #include <machine/boot.h>
 #include <machine/generic.h>
 #include <machine/irq.h>
 #include <machine/asyncirq.h>
 #include <machine/psl.h>
+#include <machine/frame.h>
 #include <machine/cache.h>
 #include <machine/idle.h>
 
 static volatile struct rvm_general_driver * const gd = (void *)RVM_GENERIC_ADDR;
-static uint64_t last_tick;
-static unsigned int channel;
 static bool clock_started;
+volatile uint64_t rvm_icnt_clock_ready;
 void rvm_kernel_irq_entry(void);
 void rvm_kernel_irq(uint64_t *);
+void rvm_icnt_start(void);
+void rvm_icnt_idle_ensure(void);
+#ifdef MULTIPROCESSOR
+void rvm_icnt_secondary_start(void);
+#endif
 
 static u_int
 rvm_get_timecount(struct timecounter *tc __unused)
@@ -32,7 +42,9 @@ static struct timecounter rvm_timecounter = {
 	.tc_counter_mask = UINT32_MAX,
 	.tc_frequency = 1000000,
 	.tc_name = "rvm-monotonic",
-	.tc_quality = 100,
+	/* SMP reads of the device counter can regress; prefer the MI
+	 * interrupt timecounter driven by the primary CPU's ICNT tick. */
+	.tc_quality = -100,
 };
 
 static int
@@ -53,16 +65,6 @@ static struct todr_chip_handle rvm_todr = {
 	.todr_settime = rvm_rtc_set,
 };
 
-static void
-rvm_timer_arm(unsigned int next)
-{
-	gd->timer[next].control = 0;
-	gd->timer[next].counter = 0;
-	gd->timer[next].reset = 1;
-	rvm_irq_set_inte(UINT64_C(1) << (next ? RVM_TIMER2_IRQ : RVM_TIMER_IRQ));
-	gd->timer[next].control = RVM_TIMER_ACTIVE | RVM_TIMER_INTERRUPT;
-}
-
 void
 cpu_initclocks(void)
 {
@@ -70,17 +72,31 @@ cpu_initclocks(void)
 	rvm_intr_disable();
 	stathz = 0;
 	profhz = hz;
-	rvm_boot_vectors[RVM_TIMER_VECTOR] = rvm_kernel_irq_entry;
-	rvm_boot_vectors[RVM_TIMER2_VECTOR] = rvm_kernel_irq_entry;
+	rvm_boot_vectors[RVM_VECTOR_INSTCOUNT] = rvm_kernel_irq_entry;
 	gd->timer[0].control = gd->timer[1].control = 0;
 	gd->int_mask = 3;
+	rvm_irq_set_inte(rvm_irq_get_inte() &
+	    ~((UINT64_C(1) << RVM_TIMER_IRQ) | (UINT64_C(1) << RVM_TIMER2_IRQ)));
 	tc_init(&rvm_timecounter);
 	todr_attach(&rvm_todr);
-	channel = 0;
-	last_tick = gd->monotonic_ns;
+	curcpu()->ci_last_tick = gd->monotonic_ns;
 	clock_started = true;
-	rvm_timer_arm(channel);
+	rvm_icnt_clock_ready = 1;
+	rvm_icnt_start();
 	rvm_intr_apply();
+}
+
+void
+rvm_icnt_idle_ensure(void)
+{
+	struct cpu_info *ci = curcpu();
+
+	/* A suppressed ICNT exception can leave an idle CPU without a tick.
+	 * HALT's finite count still returns here, so restore the clock only
+	 * after a missed interval. */
+	if (clock_started && gd->monotonic_ns - ci->ci_last_tick >=
+	    2 * (1000000000 / RVM_CLOCK_HZ))
+		rvm_icnt_start();
 }
 
 void
@@ -98,20 +114,37 @@ rvm_kernel_irq(uint64_t *saved)
 	KASSERT(!cf.cf_usermode ||
 	    (saved[0] & (RVM_CR_INSTCACHE | RVM_CR_DATACACHE) & ~RVM_USER_CACHE_MASK) == 0);
 
-	if (!clock_started || (frame[0] >> 48) != 0 ||
-	    vector != (channel ? RVM_TIMER2_VECTOR : RVM_TIMER_VECTOR))
+	if (!clock_started || (frame[0] >> 48) != RVM_EF_VERSION_TEMP ||
+	    vector != RVM_VECTOR_INSTCOUNT)
 		rvm_boot_trap(saved + 1);
 	rvm_idle_irq_return(frame);
+#ifdef MULTIPROCESSOR
+	/* ICNT is independent of CR's device interrupt mask.  Service IPIs
+	 * at high IPL as a real interprocessor interrupt would, unless the
+	 * interrupted CPU is inside the global atomic exchange gate. */
+	if (mp_online && ci->ci_atomic_active == 0 && ci->ci_pmap_depth == 0) {
+		ci->ci_cpl = IPL_HIGH;
+		ci->ci_intr_depth++;
+		ipi_cpu_handler();
+		if (atomic_swap_uint(&ci->ci_flags, 0) & 1)
+			xc_ipi_handler();
+		ci->ci_intr_depth--;
+		ci->ci_cpl = oldipl;
+	}
+#endif
+	/* ICNT also fires with device interrupts masked. Do not run MI clock
+	 * callbacks inside a critical section; elapsed time is caught up later. */
+	if (!(saved[0] & RVM_CR_INTERRUPT) || oldipl >= IPL_SCHED ||
+	    ci->ci_mtx_count != 0 || ci->ci_intr_depth != 0 ||
+	    (curlwp != NULL && curlwp->l_md.md_irq_hold != 0))
+		return;
 	ci->ci_cpl = IPL_SCHED;
 	ci->ci_intr_depth++;
-	gd->timer[channel].control = 0;
-	gd->int_mask = 1UL << channel;
-	channel ^= 1;
-	rvm_timer_arm(channel);
 	now = gd->monotonic_ns;
-	elapsed = (now - last_tick) / (1000000000 / RVM_CLOCK_HZ);
+	elapsed = (now - ci->ci_last_tick) / (1000000000 / RVM_CLOCK_HZ);
+	if (elapsed > 64) elapsed = 64;
 	while (elapsed-- != 0) {
-		last_tick += 1000000000 / RVM_CLOCK_HZ;
+		ci->ci_last_tick += 1000000000 / RVM_CLOCK_HZ;
 		hardclock(&cf);
 	}
 	ci->ci_intr_depth--;
@@ -122,6 +155,15 @@ rvm_kernel_irq(uint64_t *saved)
 	 * or in-kernel preemption in its normal-kernel feature flags yet.
 	 */
 }
+
+#ifdef MULTIPROCESSOR
+void
+rvm_icnt_secondary_start(void)
+{
+	curcpu()->ci_last_tick = gd->monotonic_ns;
+	rvm_icnt_start();
+}
+#endif
 
 void
 delay(unsigned int usec)

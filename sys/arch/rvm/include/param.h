@@ -43,8 +43,8 @@
  */
 #define STACK_ALIGNBYTES ( 4UL - 1 )
 
-/* Start with a uniprocessor VM. */
-#define MAXCPUS			 1
+/* The machine limit is fixed at compile time; UP kernels still use cpu0. */
+#define MAXCPUS             8
 #define COHERENCY_UNIT 64
 #define CACHE_LINE_SIZE 64
 

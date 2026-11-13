@@ -24,6 +24,8 @@ def main():
     parser.add_argument('--early', action='store_true',
                         help='require the EARLY idle/HALT and timed-CV regression instead of a production-only boot')
     parser.add_argument('--ram-mib', type=int, default=64)
+    parser.add_argument('--no-network', action='store_true',
+                        help='omit TAP networking from the disposable test VM')
     parser.add_argument('--timeout', type=float,
                         help='total seconds (default: 300 with login, otherwise 90)')
     parser.add_argument('--idle-seconds', type=float, default=0,
@@ -34,6 +36,8 @@ def main():
                         help='authenticate root and run a shell command on the copied image')
     parser.add_argument('--login-count', type=int, default=2,
                         help='successful logins on the same copied disk (default: 2)')
+    parser.add_argument('--history-keys', action='store_true',
+                        help='check Up arrow recalls and executes the prior shell command')
     parser.add_argument('--source-root', type=Path,
                         help='use a separately packaged native-root directory')
     parser.add_argument('--guest-command',
@@ -81,6 +85,8 @@ def main():
         args.timeout = 300 if args.login else 90
     if args.login_count < 1:
         parser.error('--login-count must be positive')
+    if args.history_keys and not args.login:
+        parser.error('--history-keys requires --login')
     source = args.source_root.resolve() if args.source_root else args.objdir.resolve()/'native-root'
     with tempfile.TemporaryDirectory(prefix='rvm-native-root-') as directory:
         boot = Path(directory)
@@ -90,8 +96,12 @@ def main():
         kernel_image = boot/'netbsd.fhr'
         if kernel_image.read_bytes()[7] == 1:
             kernel_image.write_bytes(unpack_fhr(kernel_image.read_bytes()))
-        (boot/'vm.config').write_text(re.sub(r'Size = \d+', f'Size = {args.ram_mib * 16}',
-                                            (source/'vm.config').read_text(), count=1))
+        config = re.sub(r'Size = \d+', f'Size = {args.ram_mib * 16}',
+                        (source/'vm.config').read_text(), count=1)
+        if args.no_network:
+            config = re.sub(r'\n\[NETWORK\]\n.*?\n End\n', '\n', config,
+                            flags=re.DOTALL)
+        (boot/'vm.config').write_text(config)
         env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy')
         if args.login:
             injector = boot/'keyboard.so'
@@ -461,6 +471,11 @@ def main():
                     utility_checks += [args.guest_command + '\n']
                 steps += [('login: ', b'root\n'), ('Password:', password)]
                 steps += [('# ', check.encode()) for check in utility_checks]
+                if args.history_keys and count == 1:
+                    steps += [('# ', b'echo RVM history key verified\n'),
+                              ('RVM history key verified\n', b''),
+                              ('# ', b'\x80\n'),
+                              ('RVM history key verified\n', b'')]
                 steps += [('# ', command.encode()),
                           (f'RVM root login {count} verified', b'')]
         stage = offset = 0
@@ -518,7 +533,9 @@ def main():
         if args.login:
             assert stage == len(steps), f'Login stopped at stage {stage}/{len(steps)}:\n'+transcript[-10000:]
             if args.guest_marker:
-                assert args.guest_marker in transcript, transcript[-10000:]
+                assert f'\n{args.guest_marker}\n' in transcript, transcript[-10000:]
+            if args.history_keys:
+                assert transcript.count('RVM history key verified\n') >= 2, transcript[-10000:]
             assert transcript.count('uid=0(root)') >= args.login_count, transcript[-5000:]
             if args.extended_utils:
                 for marker in (

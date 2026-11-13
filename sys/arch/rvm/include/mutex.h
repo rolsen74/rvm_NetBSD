@@ -1,4 +1,4 @@
-/* Bootstrap mutex storage; only UP execution with interrupts disabled works. */
+/* Normal kernels use MI mutexes backed by MD atomic operations. */
 #ifndef _RVM_MUTEX_H_
 #define _RVM_MUTEX_H_
 

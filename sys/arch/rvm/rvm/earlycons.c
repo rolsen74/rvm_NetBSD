@@ -16,7 +16,7 @@ rvm_early_consinit(void)
 {
 	column = row = 0;
 	gd->video_control = 1;
-	gd->term_control = RVM_TERM_XAUTOWRAP;
+	gd->term_control = RVM_TERM_XAUTOWRAP | RVM_TERM_CURSOR;
 	gd->term_apen = 0xffffffffU;
 	gd->term_bpen = 0xff000000U;
 	gd->term_xpos = 0;
@@ -61,6 +61,10 @@ rvm_early_putchar(int ch)
 		gd->term_putchar = (unsigned char)ch;
 		column++;
 	}
+	/* PutChar uses the position of the glyph.  Publish the position of
+	 * the next input cell separately so the display can draw a cursor. */
+	gd->term_xpos = column < RVM_TERM_COLUMNS ? column : RVM_TERM_COLUMNS - 1;
+	gd->term_ypos = row;
 }
 
 void

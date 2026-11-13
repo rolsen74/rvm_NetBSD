@@ -78,7 +78,22 @@ console_input(void *arg)
 			unsigned key = event & 0xffff;
 			if (event == UINT64_MAX)
 				break;
-			if (!(event & (1UL << 16)) || key == 0 || key >= 128)
+			if (!(event & (1UL << 16)))
+				continue;
+			/* VMEmu sends navigation keys above ASCII.  The display is a
+			 * simple character console, so feed the equivalent emacs keys
+			 * to shells using libedit without requiring ANSI sequences. */
+			switch (key) {
+			case 0x0101: key = 0x10; break; /* Up: previous history */
+			case 0x0102: key = 0x0e; break; /* Down: next history */
+			case 0x0103: key = 0x02; break; /* Left: backward char */
+			case 0x0104: key = 0x06; break; /* Right: forward char */
+			case 0x0122: key = 0x01; break; /* Home: start of line */
+			case 0x0123: key = 0x05; break; /* End: end of line */
+			case 0x0121: key = 0x04; break; /* Delete: delete char */
+			default: break;
+			}
+			if (key == 0 || key >= 128)
 				continue;
 			/* SDL provides Backspace as ASCII BS; MI defaults use DEL. */
 			if (key == '\b') key = 0x7f;
@@ -108,7 +123,8 @@ rvmconsopen(dev_t dev, int flags, int mode __unused, struct lwp *l)
 		console_tty->t_oproc = console_start;
 		console_tty->t_param = console_param;
 		tty_attach(console_tty);
-		callout_init(&input_callout, 0);
+		/* Let the poller follow the CPU opening the console under SMP. */
+		callout_init(&input_callout, CALLOUT_MPSAFE);
 		callout_setfunc(&input_callout, console_input, console_tty);
 	}
 	tp = console_tty;

@@ -1,4 +1,4 @@
-/* RVM's 64-bit C11 libcall uses the same ordered UP CAS as public atomics. */
+/* RVM's 64-bit C11 libcall uses the same RAS CAS as public atomics. */
 #include <sys/types.h>
 #include <sys/atomic.h>
 #include <stdbool.h>

@@ -1,4 +1,4 @@
-/* UP normal kernels use the IRQ-serialized MD atomic implementation. */
+/* Normal kernels use the MD atomic implementation. */
 #ifdef RVM_KERNEL
 #ifndef _RVM_LOCK_H_
 #define _RVM_LOCK_H_

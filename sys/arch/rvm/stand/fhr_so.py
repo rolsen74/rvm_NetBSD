@@ -76,8 +76,8 @@ def add_libraries(data, section_count, dependencies):
 
 def check_image(data):
     if (len(data) < 16 or data[:8] != b'FHR\0\x01\x01\x01\0'
-            or data[8:14] != b'\0\0\x01\0\x01\0'):
-        raise ValueError('expected a big-endian RVM FHR64 relocatable object')
+            or data[8:14] != b'\0\0\x01\x03\x01\0'):
+        raise ValueError('expected a big-endian NetBSD FHR64 relocatable object')
     cursor = 16
     sections = []
     if data[14:16] != b'\0\0':

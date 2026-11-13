@@ -194,6 +194,7 @@ struct flags_s {
 	int f_unread;	/* some message in the thread is unread */
 };
 
+#ifdef THREAD_SUPPORT
 static void
 get_and_or_flags(struct message *mp, struct flags_s *flags)
 {
@@ -205,6 +206,7 @@ get_and_or_flags(struct message *mp, struct flags_s *flags)
 		get_and_or_flags(mp->m_clink, flags);
 	}
 }
+#endif
 
 static const char *
 sfmtflag(const char **fmtbeg, const char *fmtch, struct message *mp)

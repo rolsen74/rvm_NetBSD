@@ -139,14 +139,18 @@ makemessage(FILE *f, int omsgCount, int nmsgCount)
 		off = 0;
 	else
 		off = dot - omessage;
+#ifdef THREAD_SUPPORT
 	thread_save_old_links(omessage, omsgCount);
+#endif
 	nmessage = realloc(omessage, size);
 	if (nmessage == NULL)
 		err(EXIT_FAILURE,
 		    "Insufficient memory for %d messages", nmsgCount);
 	dot = nmessage + off;
 
+#ifdef THREAD_SUPPORT
 	thread_fix_old_links(nmessage, min(omsgCount, nmsgCount));
+#endif
 
 #ifndef THREAD_SUPPORT
 	message = nmessage;

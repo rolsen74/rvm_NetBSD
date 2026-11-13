@@ -54,6 +54,11 @@
 #define RVM_CREG_INTE		 9
 #define RVM_CREG_UD1		 10
 #define RVM_CREG_UD2		 11
+#define RVM_CREG_ICNT		 14
+
+/* VMEmu instruction-count exception, raised when ICNT reaches zero. */
+/* VMEmu advances a halted CPU at 1,000,000 instructions per second. */
+#define RVM_ICNT_QUANTUM	 20000 /* 1,000,000 / RVM_CLOCK_HZ (50) */
 
 /* RTE restores the saved interrupt level and SR, per VMEmu behavior.
  * Bootstrap spl*() masks the asynchronous clock through CR at IPL_SCHED.

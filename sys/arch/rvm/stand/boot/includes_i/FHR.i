@@ -55,7 +55,7 @@ FHR_SYM0:		equ	$53594d00	; SYM\0 - Symbol Names
  U8		FHR_Type		; 0 = Exe, 1 = Object, 2 = Shared
  U8		FHR_Pack		; 0 = None, 1 = zlib
  U16		FHR_Pad2		;
- U16		FHR_OSType		; 0x0100 = RVM, 0x0101 = AmigaOS3, 0x0102 = AmigaOS4
+ U16		FHR_OSType		; 0x0100 = RVM, 0x0101 = AmigaOS3, 0x0102 = AmigaOS4, 0x0103 = NetBSD
  U16		FHR_CPUType		; 0x0100 = RVM, 0x0101 = m68k,     0x0102 = PowerPC
  U16		FHR_Sections		; Number of Sections
  LABEL		FHR_SIZEOF

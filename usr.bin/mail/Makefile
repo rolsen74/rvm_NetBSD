@@ -7,6 +7,13 @@
 
 USE_FORT?= yes	# data-driven bugs?
 
+.if ${MACHINE_ARCH} == "rvm64"
+USE_EDITLINE=no
+MIME_SUPPORT=no
+CHARSET_SUPPORT=no
+THREAD_SUPPORT=no
+.endif
+
 USE_EDITLINE?=yes
 MIME_SUPPORT?=yes	# currently requires USE_EDITLINE
 CHARSET_SUPPORT?=yes	# requires MIME_SUPPORT

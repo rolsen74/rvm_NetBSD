@@ -15,12 +15,19 @@ int
 SDL_PollEvent(SDL_Event *event)
 {
 	static int (*real_poll)(SDL_Event *);
-	static int fd = -1, release;
+	static int fd = -1, release, text_pending;
 	static unsigned char previous;
 	static long long next_key;
 	unsigned char ch;
 	if (real_poll == NULL)
 		real_poll = dlsym(RTLD_NEXT, "SDL_PollEvent");
+	if (text_pending) {
+		memset(event, 0, sizeof(*event));
+		event->type = SDL_TEXTINPUT;
+		event->text.text[0] = previous;
+		text_pending = 0;
+		return 1;
+	}
 	if (real_poll(event))
 		return 1;
 	if (fd < 0) {
@@ -43,7 +50,8 @@ SDL_PollEvent(SDL_Event *event)
 	event->type = release ? SDL_KEYUP : SDL_KEYDOWN;
 	event->key.state = release ? SDL_RELEASED : SDL_PRESSED;
 	event->key.keysym.sym = ch == '\n' ? SDLK_RETURN :
-	    ch == '\b' ? SDLK_BACKSPACE : ch;
+	    ch == '\b' ? SDLK_BACKSPACE :
+	    ch == 0x80 ? SDLK_UP : ch;
 	/* Real SDL letter keycodes remain lowercase when Shift is held. */
 	if (ch >= 'A' && ch <= 'Z') {
 		event->key.keysym.sym = ch + ('a' - 'A');
@@ -78,6 +86,7 @@ SDL_PollEvent(SDL_Event *event)
 	event->key.keysym.scancode = (SDL_Scancode)ch;
 	previous = ch;
 	release = !release;
+	text_pending = release && ch >= 32 && ch <= 126;
 	return 1;
 }
 

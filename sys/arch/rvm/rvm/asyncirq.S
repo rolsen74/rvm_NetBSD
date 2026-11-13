@@ -80,7 +80,7 @@ rvm_async_halt:
         mtctrl r0,cr
         xdef rvm_async_halt_pc
 rvm_async_halt_pc:
-        halt
+        halt #0
         xdef rvm_async_after_halt
 rvm_async_after_halt:
         move.q #8,r0

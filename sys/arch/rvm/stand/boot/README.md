@@ -33,6 +33,15 @@ The assembly bootloader accepts an unpacked kernel. `./run.sh` and
 before starting VMEmu. Direct `VMEmu -c vm.config` still requires an unpacked
 kernel file.
 
+Guest `halt` and `poweroff` now use VMEmu's privileged `emuexit` instruction
+after NetBSD runs its shutdown hooks. Guest `reboot` uses privileged emulator
+command 16, which reloads the VM configuration and boots again from the same
+disk image. Fatal kernel stops still halt for inspection.
+Use `/sbin/poweroff` or `/sbin/shutdown -p now` to exit VMEmu.
+`/sbin/shutdown now` enters single-user mode, following NetBSD's normal
+shutdown behavior. The minimal image has no rc.d services, so its
+`/etc/rc.shutdown` is a no-op.
+
 The version 1 handoff supports one contiguous physical RAM bank at zero;
 it does not describe discontiguous memory or firmware reservations. Kernel
 startup copies and validates it before enabling the MMU. Bootstrap reservations
@@ -68,6 +77,18 @@ VMEMU="$PWD/../rvm_VMEmu/bin/VMEmu_linux_SDL2" \
 RVM_NATIVE_OBJDIR=obj.rvm-native-regcall ./run.sh
 ```
 
+Without an override, `run.sh` chooses the most recently packaged image. Set
+`RVM_NATIVE_IMAGE_DIR` to boot a specific image directory, including the
+`obj.rvm-native-regcall/accel-wall-login-fixed` image built for ping and IRC checks with
+kernel and user instruction caches plus the MMU TLB enabled.
+`build-native-root.sh` now selects `DISKROOT_ACCEL` by default. Set
+`RVM_KERNEL_CONFIG=DISKROOT_ICACHE` for kernel caching only, or
+`RVM_KERNEL_CONFIG=DISKROOT_GENERIC` to disable both caches and the TLB.
+`RVM_NATIVE_OBJDIR` still selects that object's `native-root` directory.
+RVM login enables group write on the authenticated tty, allowing `wall` and
+`shutdown` broadcasts to reach the console. The guest login profile also
+enables `mesg y` for interactive shells.
+
 Run VMEmu as the regular user named by `RVM_TAP_USER`; only the host setup
 helper needs `sudo`. Using `sudo` for VMEmu can hide the user's audio session,
 making SDL fail while opening ALSA. On a machine without audio, prefix the
@@ -85,7 +106,27 @@ ifconfig rvmnet0 inet 192.168.76.2 netmask 255.255.255.0 up
 ping -c 3 192.168.76.1
 ```
 
+For a quick IRC TCP test, use `irc SERVER [PORT [NICK [#CHANNEL [KEY]]]]` in the
+guest. It prints server lines, answers IRC `PING`, and joins the channel after
+registration. Type a message to send it to the current channel. `/join #room`,
+`/join #room key`, `/msg nick text`, `/nick newnick`, `/raw COMMAND`, and `/quit`
+are supported. A channel key is sent only with `JOIN`, never with messages.
+This small client uses plain TCP; use a trusted test server for this check.
+
 The guest reaches other networks through Ubuntu's NAT. The TAP plugin needs
 `/dev/net/tun` and permission to attach to the named interface.
 The Linux kernel's [TUN/TAP documentation](https://docs.kernel.org/networking/tuntap.html)
 describes the device and permission model.
+
+The native root also includes `arp`, `traceroute`, `sockstat`, `ftp`, `telnet`,
+`inetd`, `dhcpcd`, and `tcpdump`. The kernel exposes `/dev/bpf` for DHCP and
+packet capture. The image above uses its static address, so `dhcpcd` should
+only be started when the TAP's connected network provides DHCP. For RVM's
+static build, `ftp` now links with OpenSSL and exposes TLS support; `telnet`
+has no encryption or authentication extensions. The image includes OpenSSL,
+SSH, `sshd`, and `ssh-keygen`. The build generates a unique Ed25519 host key
+under the object directory and copies the build host's CA bundle when present.
+OpenSSL 3.5 currently faults during guest crypto initialization, so TLS
+handshakes and SSH sessions are not yet verified. `sshd` is not started on
+boot while this is unresolved. `tcpdump -i rvmnet0` can inspect traffic inside
+the guest after login.

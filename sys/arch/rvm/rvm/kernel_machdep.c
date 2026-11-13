@@ -13,6 +13,7 @@
 #include <machine/boot.h>
 #include <machine/bootmem.h>
 #include <machine/pmap.h>
+#include <machine/pmap_private.h>
 #include <machine/mmu.h>
 #include <machine/pcb.h>
 #include <machine/bootcopy.h>
@@ -23,6 +24,65 @@
 char machine[] = MACHINE;
 char machine_arch[] = MACHINE_ARCH;
 struct cpu_info cpu_info_primary;
+#ifdef MULTIPROCESSOR
+struct cpu_info cpu_info_secondary[MAXCPUS - 1];
+unsigned int rvm_cpu_count = 1;
+volatile uint64_t rvm_secondary_go;
+volatile uint64_t rvm_secondary_started[MAXCPUS];
+volatile uint64_t rvm_secondary_arrived[MAXCPUS];
+char rvm_secondary_boot_stacks[MAXCPUS - 1][RVM_BOOT_STACK_SIZE]
+    __aligned(PAGE_SIZE);
+struct cpu_info *rvm_secondary_ci_ptrs[MAXCPUS] = {
+	&cpu_info_primary, &cpu_info_secondary[0], &cpu_info_secondary[1],
+	&cpu_info_secondary[2], &cpu_info_secondary[3],
+	&cpu_info_secondary[4], &cpu_info_secondary[5],
+	&cpu_info_secondary[6]
+};
+char *rvm_secondary_boot_stack_tops[MAXCPUS] = {
+	rvm_boot_stack + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[0] + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[1] + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[2] + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[3] + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[4] + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[5] + RVM_BOOT_STACK_SIZE,
+	rvm_secondary_boot_stacks[6] + RVM_BOOT_STACK_SIZE
+};
+void rvm_icnt_secondary_start(void);
+vaddr_t rvm_secondary_hatch(void);
+void
+cpu_boot_secondary_processors(void)
+{
+	if (rvm_cpu_count < 2) return;
+	for (unsigned int id = 1; id < rvm_cpu_count; id++)
+		KASSERT(rvm_secondary_arrived[id] != 0);
+	rvm_secondary_go = 1;
+	for (unsigned int id = 1; id < rvm_cpu_count; id++) {
+		for (unsigned int i = 0; i < 10000 &&
+		    rvm_secondary_started[id] == 0; i++)
+			delay(100);
+		if (rvm_secondary_started[id] == 0)
+			panic("RVM cpu%u failed to start", id);
+	}
+}
+
+vaddr_t
+rvm_secondary_hatch(void)
+{
+	struct cpu_info *ci = curcpu();
+	unsigned int id = ci->ci_cpuid;
+	KASSERT(id > 0 && id < rvm_cpu_count);
+	struct lwp *idle = ci->ci_data.cpu_idlelwp;
+	ci->ci_curlwp = idle;
+	ci->ci_onproc = idle;
+	ci->ci_cpl = IPL_HIGH;
+	rvm_boot_enable_mmu(rvm_boot_pmap.root);
+	rvm_set_user_root(0);
+	rvm_icnt_secondary_start();
+	rvm_secondary_started[id] = 1;
+	return (vaddr_t)idle->l_addr + USPACE;
+}
+#endif
 struct vm_map *phys_map;
 char rvm_boot_stack[RVM_BOOT_STACK_SIZE] __aligned(PAGE_SIZE);
 void (*rvm_boot_vectors[RVM_BOOT_NVECTORS])(void) __aligned(16);
@@ -111,9 +171,18 @@ rvm_boot_trap(const uint64_t *saved)
 	rvm_early_puthex(frame[0]);
 	rvm_early_puts(" root ");
 	rvm_early_puthex(frame[2]);
+	if ((frame[0] >> 48) == 3) {
+		rvm_early_puts(" virtual ");
+		rvm_early_puthex(frame[3]);
+		rvm_early_puts(" physical ");
+		rvm_early_puthex(frame[4]);
+	}
 	rvm_early_putchar('\n');
 	rvm_boot_stop();
 }
+
+void rvm_boot_exit(void) __dead;
+void rvm_boot_reset(void) __dead;
 
 void
 cpu_reboot(int howto, char *bootstr __unused)
@@ -122,8 +191,12 @@ cpu_reboot(int howto, char *bootstr __unused)
 		vfs_shutdown();
 	doshutdownhooks();
 	pmf_system_shutdown(howto);
-	rvm_early_puts("NetBSD/RVM halted\n");
-	rvm_boot_stop();
+	if (howto & RB_HALT) {
+		rvm_early_puts("NetBSD/RVM powering off\n");
+		rvm_boot_exit();
+	}
+	rvm_early_puts("NetBSD/RVM rebooting\n");
+	rvm_boot_reset();
 }
 
 void abort(void) { panic("RVM kernel abort"); }

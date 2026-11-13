@@ -12,6 +12,14 @@ tools=${RVM_KERNEL_TOOLDIR:-"$obj/hosttools"}
 toolchain=${RVM_TOOLCHAIN:-"$root/../rvm_gcc/rvm_cross_netbsd"}
 toolchain=$(CDPATH= cd -- "$toolchain" && pwd)
 jobs=${RVM_JOBS:-4}
+if [ -z "${VMASM:-}" ]; then
+    if [ -x "$root/../rvm_VMAsm/bin/VMAsm" ]; then
+        VMASM="$root/../rvm_VMAsm/bin/VMAsm"
+    else
+        VMASM=$(command -v VMAsm)
+    fi
+fi
+export VMASM
 
 # Fail before a large build if the external compiler lacks the required hooks.
 probe=$(mktemp -d "$obj/compiler.XXXXXX")
@@ -66,12 +74,14 @@ PY
 
 ./build.sh -m rvm -U -u -O "$obj" -T "$tools" \
     -V EXTERNAL_TOOLCHAIN="$toolchain" -V RVM_TOOLCHAIN_STAMP="$RVM_TOOLCHAIN_STAMP" \
+    -V VMASM="$VMASM" \
     -V MKGDB=no makewrapper
 subset='host-mkdep compat binstall .WAIT date mktemp sed m4 yacc .WAIT lex .WAIT awk genassym lorder tsort mkdep cksum stat config'
 "$tools/bin/nbmake-rvm" -C tools SUBDIR="$subset" obj
 "$tools/bin/nbmake-rvm" -C tools SUBDIR="$subset" -j "$jobs" build_install
 ./build.sh -m rvm -U -u -j "$jobs" -O "$obj" -T "$tools" \
     -V EXTERNAL_TOOLCHAIN="$toolchain" -V RVM_TOOLCHAIN_STAMP="$RVM_TOOLCHAIN_STAMP" \
+    -V VMASM="$VMASM" \
     -V MKGDB=no "kernel=$config"
 
 make -f sys/arch/rvm/Makefile.bootstrap OBJDIR="$obj/loader" \
@@ -79,6 +89,32 @@ make -f sys/arch/rvm/Makefile.bootstrap OBJDIR="$obj/loader" \
 cp "$obj/loader/bootloader.bin" "$obj/bootloader.bin"
 cp "$obj/sys/arch/rvm/compile/$config/netbsd" "$obj/netbsd.fhr.new"
 mv "$obj/netbsd.fhr.new" "$obj/netbsd.fhr"
-cp sys/arch/rvm/conf/vmemu.conf "$obj/vm.config"
+python3 - sys/arch/rvm/conf/vmemu.conf "$obj/vm.config" "$config" <<'PY'
+from pathlib import Path
+import os, sys
+
+source, target, kernel = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+count = int(os.environ.get('RVM_CPU_COUNT', '5')) if kernel in ('SMP', 'SMPROOT') else 1
+if not 1 <= count <= 8:
+    raise SystemExit('RVM_CPU_COUNT must be between 1 and 8')
+lines = []
+in_cpu = False
+for line in source.read_text().splitlines(keepends=True):
+    if line.strip() == '[CPU]':
+        in_cpu = True
+        continue
+    if in_cpu:
+        if line.strip() == 'End':
+            in_cpu = False
+        continue
+    lines.append(line)
+if in_cpu:
+    raise SystemExit('Unterminated [CPU] section in '+str(source))
+config = ''.join(lines)
+if '[GENERIC]' not in config:
+    raise SystemExit('Missing [GENERIC] section in '+str(source))
+cpus = ('[CPU]\n Halted = 0\n End\n\n' * count)
+target.write_text(config.replace('[GENERIC]', cpus+'[GENERIC]', 1))
+PY
 echo "RVM $config image: $obj/netbsd.fhr"
 echo "Run ./run-kernel.sh (use the same RVM_KERNEL_OBJDIR if overridden)."

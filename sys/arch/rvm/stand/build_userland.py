@@ -7,6 +7,7 @@ ELF dynamic linker. Link programs with stand/user_link.py and retain the
 archive's adjacent assembly and binding/initializer metadata.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
 from pathlib import Path
@@ -124,11 +125,14 @@ CWARNFLAGS+= -Wno-error=attributes
         if fields and fields[0].startswith('./usr/include'):
             (dest/fields[0][2:]).mkdir(parents=True, exist_ok=True)
     for tree in ('include', 'sys', 'common/include', 'lib/libpthread', 'lib/libcurses',
-                 'external/bsd/elftoolchain/common'):
+                 'external/bsd/elftoolchain/common', 'external/bsd/blocklist/include',
+                 'external/bsd/libevent/include'):
         for path in (root/tree).rglob('Makefile'):
             (obj/path.parent.relative_to(root)).mkdir(parents=True, exist_ok=True)
     for directory in ('include', 'sys', 'lib/libpthread', 'lib/libcurses',
-                      'external/bsd/elftoolchain/common/sys'):
+                      'external/bsd/elftoolchain/common/sys',
+                      'external/bsd/blocklist/include',
+                      'external/bsd/libevent/include'):
         run([make, '-C', directory, '-j', args.jobs, 'includes'], root)
     # A changed external compiler or FHR adapter must invalidate normal make's
     # objects too, even when their C source timestamps have not changed.
@@ -145,7 +149,8 @@ CWARNFLAGS+= -Wno-error=attributes
     stamp = obj/'userland-toolchain.stamp'
     value = digest.hexdigest()+'\n'
     if not stamp.exists() or stamp.read_text() != value:
-        for directory in ('lib', 'bin', 'sbin', 'usr.bin', 'usr.sbin', 'libexec'):
+        for directory in ('lib', 'bin', 'sbin', 'usr.bin', 'usr.sbin',
+                          'libexec', 'external', 'crypto'):
             for pattern in ('*.o', '*.a'):
                 for path in (obj/directory).rglob(pattern):
                     path.unlink()
@@ -189,26 +194,34 @@ CWARNFLAGS+= -Wno-error=attributes
             (name+'.o', obj/'lib/csu'/(name+'.o'))
             for name in ('crt0', 'crtbegin', 'crtend')]:
         path = lib/name
+        if path.is_symlink() and path.resolve() == origin.resolve():
+            continue
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.exists():
             raise SystemExit('SDK library path is a directory: '+str(path))
         path.symlink_to(origin)
-    for program in args.program:
+    def build_program(program):
         directory = Path(program)
         if directory.is_absolute() or '..' in directory.parts or not (root/directory/'Makefile').exists():
             raise SystemExit('Expected a source directory containing a Makefile: '+program)
         (obj/directory).mkdir(parents=True, exist_ok=True)
         command = shlex.join([sys.executable, str(stand/'user_prog.py'),
                               '--toolchain', str(cross), '--sysroot', str(dest)])
-        names = subprocess.check_output([str(make), '-C', str(directory),
+        names = subprocess.check_output([str(make), '-C', str(directory), 'MKRUMP=no',
             '-V', '${PROGS} ${PROGS_CXX}'], cwd=root, text=True).split()
         links = ['_CCLINK.'+name+'='+command for name in names]
         run([make, '-C', directory, '-j', args.jobs,
+             'MKRUMP=no',
              'CC='+str(stand/'user_cc.py'), 'RVM_REAL_CC='+str(cc),
              '_CCLINK='+command, 'LDSTATIC=-static', 'LDFLAGS=', '_PROGLDOPTS=',
              'LIBCRTBEGIN='+str(lib/'crtbegin.o'), 'LIBCRTEND='+str(lib/'crtend.o'),
              'LIBCRTI=', 'MKPIE=no', 'MKSTRIPIDENT=no', 'all'] + links, root)
+    # Each program has its own object directory; the installed headers and
+    # libraries above are read-only throughout this phase.
+    with ThreadPoolExecutor(max_workers=args.jobs) as executor:
+        for result in executor.map(build_program, args.program):
+            pass
     if args.libm:
         math_members = subprocess.check_output([str(cross/'bin/rvm-netbsd-ar'), 't',
             str(obj/'lib/libm/libm.a')], text=True).splitlines()

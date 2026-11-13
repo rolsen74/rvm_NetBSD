@@ -1,0 +1,4 @@
+# SMP kernel booting an FFS root from the VMEmu HARDFILE.
+include "arch/rvm/conf/SMP"
+no config netbsd
+config netbsd root on ld0a type ffs

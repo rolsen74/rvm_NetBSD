@@ -1,4 +1,4 @@
-/* Restartable compare-and-swap for the uncached UP RVM CPU.
+/* Restartable compare-and-swap for the static, single-LWP RVM userland.
  * R2/R3/R4 are the address/expected/desired arguments. Within each range,
  * only the final store has side effects; a restart reloads the old value.
  * libc registers every range before invoking any atomic operation.

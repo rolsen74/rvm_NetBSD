@@ -93,6 +93,10 @@ __KERNEL_RCSID(0, "$NetBSD: bpf.c,v 1.259 2026/09/07 15:47:16 tls Exp $");
 
 #include <compat/sys/sockio.h>
 
+#ifdef __rvm__
+void rvm_bpf_init(void);
+#endif
+
 #ifndef BPF_BUFSIZE
 /*
  * 4096 is too small for FDDI frames. 8192 is too small for gigabit Ethernet
@@ -2708,3 +2712,17 @@ bpf_modcmd(modcmd_t cmd, void *arg)
 
 	return error;
 }
+
+#ifdef __rvm__
+/* The RVM FHR assembler currently drops the first of two linker-set sections
+ * in bpf.o.  Initialize BPF before the RVM network interface attaches. */
+void
+rvm_bpf_init(void)
+{
+	if (bpf_ops != &bpf_ops_kernel) {
+		int error = bpf_modcmd(MODULE_CMD_INIT, NULL);
+		if (error != 0)
+			panic("RVM BPF init failed: %d", error);
+	}
+}
+#endif
